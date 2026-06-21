@@ -17,8 +17,9 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 
-import React, { useEffect, useState, useRef, useMemo } from 'react';
+import React, { useEffect, useState, useRef, useMemo, useContext } from 'react';
 import { useTranslation } from 'react-i18next';
+import { UserContext } from '../../../../context/User';
 import {
   API,
   showError,
@@ -161,6 +162,8 @@ function type2secretPrompt(type) {
 
 const EditChannelModal = (props) => {
   const { t } = useTranslation();
+  const [userState] = useContext(UserContext);
+  const isRoot = userState?.user?.role === 100;
   const channelId = props.editingChannel.id;
   const isEdit = channelId !== undefined;
   const [loading, setLoading] = useState(isEdit);
@@ -214,6 +217,7 @@ const EditChannelModal = (props) => {
     upstream_model_update_last_check_time: 0,
     upstream_model_update_last_detected_models: [],
     upstream_model_update_ignored_models: '',
+    actual_base_url: '',
   };
   const [batch, setBatch] = useState(false);
   const [multiToSingle, setMultiToSingle] = useState(false);
@@ -973,6 +977,7 @@ const EditChannelModal = (props) => {
       }
 
       initialBaseUrlRef.current = data.base_url || '';
+      if (data.actual_base_url == null) data.actual_base_url = '';
       setInputs(data);
       if (formApiRef.current) {
         formApiRef.current.setValues(data);
@@ -1846,6 +1851,7 @@ const EditChannelModal = (props) => {
     delete localInputs.upstream_model_update_last_check_time;
     delete localInputs.upstream_model_update_last_detected_models;
     delete localInputs.upstream_model_update_ignored_models;
+    if (!isRoot) { delete localInputs.actual_base_url; }
 
     let res;
     localInputs.auto_ban = localInputs.auto_ban ? 1 : 0;
@@ -3419,6 +3425,20 @@ const EditChannelModal = (props) => {
                             ]}
                             defaultValue='https://ark.cn-beijing.volces.com'
                             disabled={isIonetLocked}
+                          />
+                        </div>
+                      )}
+
+                      {/* 真实请求地址：仅超级管理员（role=100）可见 */}
+                      {isRoot && (
+                        <div>
+                          <Form.Input
+                            field='actual_base_url'
+                            label={t('真实请求地址（仅超级管理员）')}
+                            placeholder={t('留空则使用上方 API 地址；填写后服务端将向此地址发起真实请求，前端列表、错误信息和日志仍展示上方地址。例如 https://aws-external-anthropic.us-east-1.api.aws')}
+                            onChange={(value) => handleInputChange('actual_base_url', value)}
+                            showClear
+                            extraText={t('本字段仅超级管理员可见。旧渠道保留空值即可，不会影响现有行为。')}
                           />
                         </div>
                       )}
