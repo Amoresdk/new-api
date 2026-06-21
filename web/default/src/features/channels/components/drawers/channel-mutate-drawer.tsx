@@ -104,6 +104,8 @@ import {
   SecureVerificationDialog,
   useSecureVerification,
 } from '@/features/auth/secure-verification'
+import { useAuthStore } from '@/stores/auth-store'
+import { ROLE } from '@/lib/roles'
 import {
   fetchModels,
   getAllModels,
@@ -307,6 +309,10 @@ export function ChannelMutateDrawer({
 
   const isEditing = Boolean(currentRow)
   const channelId = currentRow?.id ?? null
+  const isRoot = useAuthStore(
+    (s) =>
+      Boolean(s.auth.user?.role) && s.auth.user!.role >= ROLE.SUPER_ADMIN
+  )
 
   // Fetch channel details if editing
   const { data: channelData, isLoading: isChannelLoading } = useQuery({
@@ -1867,6 +1873,34 @@ export function ChannelMutateDrawer({
                             <FormControl>
                               <input type='hidden' {...field} />
                             </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                    )}
+
+                    {isRoot && (
+                      <FormField
+                        control={form.control}
+                        name='actual_base_url'
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>
+                              {t('Actual Request URL (Super Admin only)')}
+                            </FormLabel>
+                            <FormControl>
+                              <Input
+                                placeholder={t(
+                                  'Leave empty to use the URL above; when set, the server sends real requests here while lists/errors/logs still show the URL above.'
+                                )}
+                                {...field}
+                              />
+                            </FormControl>
+                            <FormDescription>
+                              {t(
+                                'Visible to super admins only. Existing channels can leave it empty with no behavior change.'
+                              )}
+                            </FormDescription>
                             <FormMessage />
                           </FormItem>
                         )}
