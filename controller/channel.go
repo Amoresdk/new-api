@@ -1851,8 +1851,8 @@ func OllamaPullModel(c *gin.Context) {
 	}
 
 	baseURL := constant.ChannelBaseURLs[channel.Type]
-	if channel.GetBaseURL() != "" {
-		baseURL = channel.GetBaseURL()
+	if channel.GetRuntimeBaseURL() != "" {
+		baseURL = channel.GetRuntimeBaseURL()
 	}
 
 	key := strings.Split(channel.Key, "\n")[0]
@@ -1914,8 +1914,8 @@ func OllamaPullModelStream(c *gin.Context) {
 	}
 
 	baseURL := constant.ChannelBaseURLs[channel.Type]
-	if channel.GetBaseURL() != "" {
-		baseURL = channel.GetBaseURL()
+	if channel.GetRuntimeBaseURL() != "" {
+		baseURL = channel.GetRuntimeBaseURL()
 	}
 
 	// 设置 SSE 头部
@@ -1996,8 +1996,8 @@ func OllamaDeleteModel(c *gin.Context) {
 	}
 
 	baseURL := constant.ChannelBaseURLs[channel.Type]
-	if channel.GetBaseURL() != "" {
-		baseURL = channel.GetBaseURL()
+	if channel.GetRuntimeBaseURL() != "" {
+		baseURL = channel.GetRuntimeBaseURL()
 	}
 
 	key := strings.Split(channel.Key, "\n")[0]
@@ -2045,8 +2045,8 @@ func OllamaVersion(c *gin.Context) {
 	}
 
 	baseURL := constant.ChannelBaseURLs[channel.Type]
-	if channel.GetBaseURL() != "" {
-		baseURL = channel.GetBaseURL()
+	if channel.GetRuntimeBaseURL() != "" {
+		baseURL = channel.GetRuntimeBaseURL()
 	}
 
 	key := strings.Split(channel.Key, "\n")[0]

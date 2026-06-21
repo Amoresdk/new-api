@@ -167,7 +167,7 @@ func GetResponseBody(method, url string, channel *model.Channel, headers http.He
 }
 
 func updateChannelCloseAIBalance(channel *model.Channel) (float64, error) {
-	url := fmt.Sprintf("%s/dashboard/billing/credit_grants", channel.GetBaseURL())
+	url := fmt.Sprintf("%s/dashboard/billing/credit_grants", channel.GetRuntimeBaseURL())
 	body, err := GetResponseBody("GET", url, channel, GetAuthHeader(channel.Key))
 
 	if err != nil {
@@ -358,18 +358,18 @@ func updateChannelMoonshotBalance(channel *model.Channel) (float64, error) {
 
 func updateChannelBalance(channel *model.Channel) (float64, error) {
 	baseURL := constant.ChannelBaseURLs[channel.Type]
-	if channel.GetBaseURL() == "" {
+	if channel.GetRuntimeBaseURL() == "" {
 		channel.BaseURL = &baseURL
 	}
 	switch channel.Type {
 	case constant.ChannelTypeOpenAI:
-		if channel.GetBaseURL() != "" {
-			baseURL = channel.GetBaseURL()
+		if channel.GetRuntimeBaseURL() != "" {
+			baseURL = channel.GetRuntimeBaseURL()
 		}
 	case constant.ChannelTypeAzure:
 		return 0, errors.New("尚未实现")
 	case constant.ChannelTypeCustom:
-		baseURL = channel.GetBaseURL()
+		baseURL = channel.GetRuntimeBaseURL()
 	//case common.ChannelTypeOpenAISB:
 	//	return updateChannelOpenAISBBalance(channel)
 	case constant.ChannelTypeAIProxy:

@@ -22,8 +22,8 @@ func getGeminiVideoURL(channel *model.Channel, task *model.Task, apiKey string) 
 	}
 
 	baseURL := constant.ChannelBaseURLs[channel.Type]
-	if channel.GetBaseURL() != "" {
-		baseURL = channel.GetBaseURL()
+	if channel.GetRuntimeBaseURL() != "" {
+		baseURL = channel.GetRuntimeBaseURL()
 	}
 
 	adaptor := relay.GetTaskAdaptor(constant.TaskPlatform(strconv.Itoa(channel.Type)))
@@ -157,8 +157,8 @@ func getVertexVideoURL(channel *model.Channel, task *model.Task) (string, error)
 	}
 
 	baseURL := constant.ChannelBaseURLs[channel.Type]
-	if channel.GetBaseURL() != "" {
-		baseURL = channel.GetBaseURL()
+	if channel.GetRuntimeBaseURL() != "" {
+		baseURL = channel.GetRuntimeBaseURL()
 	}
 
 	adaptor := relay.GetTaskAdaptor(constant.TaskPlatform(strconv.Itoa(channel.Type)))

@@ -61,7 +61,7 @@ func VideoProxy(c *gin.Context) {
 		videoProxyError(c, http.StatusInternalServerError, "server_error", "Failed to retrieve channel information")
 		return
 	}
-	baseURL := channel.GetBaseURL()
+	baseURL := channel.GetRuntimeBaseURL()
 	if baseURL == "" {
 		baseURL = "https://api.openai.com"
 	}

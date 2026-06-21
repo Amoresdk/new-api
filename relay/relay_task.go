@@ -96,10 +96,12 @@ func ResolveOriginTask(c *gin.Context, info *relaycommon.RelayInfo) *dto.TaskErr
 		}
 		common.SetContextKey(c, constant.ContextKeyChannelKey, key)
 		common.SetContextKey(c, constant.ContextKeyChannelType, ch.Type)
-		common.SetContextKey(c, constant.ContextKeyChannelBaseUrl, ch.GetBaseURL())
+		common.SetContextKey(c, constant.ContextKeyChannelBaseUrl, ch.GetRuntimeBaseURL())
+		common.SetContextKey(c, constant.ContextKeyChannelDisplayBaseUrl, ch.GetDisplayBaseURL())
 		common.SetContextKey(c, constant.ContextKeyChannelId, originTask.ChannelId)
 
-		info.ChannelBaseUrl = ch.GetBaseURL()
+		info.ChannelBaseUrl = ch.GetRuntimeBaseURL()
+		info.ChannelDisplayBaseUrl = ch.GetDisplayBaseURL()
 		info.ChannelId = originTask.ChannelId
 		info.ChannelType = ch.Type
 		info.ApiKey = key
@@ -428,8 +430,8 @@ func tryRealtimeFetch(task *model.Task, isOpenAIVideoAPI bool) []byte {
 	}
 
 	baseURL := constant.ChannelBaseURLs[channelModel.Type]
-	if channelModel.GetBaseURL() != "" {
-		baseURL = channelModel.GetBaseURL()
+	if channelModel.GetRuntimeBaseURL() != "" {
+		baseURL = channelModel.GetRuntimeBaseURL()
 	}
 	proxy := channelModel.GetSetting().Proxy
 	adaptor := GetTaskAdaptor(constant.TaskPlatform(strconv.Itoa(channelModel.Type)))

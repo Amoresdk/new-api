@@ -261,8 +261,8 @@ func getUpstreamModelUpdateMinCheckIntervalSeconds() int64 {
 
 func fetchChannelUpstreamModelIDs(channel *model.Channel) ([]string, error) {
 	baseURL := constant.ChannelBaseURLs[channel.Type]
-	if channel.GetBaseURL() != "" {
-		baseURL = channel.GetBaseURL()
+	if channel.GetRuntimeBaseURL() != "" {
+		baseURL = channel.GetRuntimeBaseURL()
 	}
 
 	if channel.Type == constant.ChannelTypeOllama {
