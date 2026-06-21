@@ -62,6 +62,18 @@ func parseStatusFilter(statusParam string) int {
 	}
 }
 
+func isRoot(c *gin.Context) bool {
+	return c.GetInt("role") >= common.RoleRootUser
+}
+
+func stripActualBaseURL(channels []*model.Channel) {
+	for i := range channels {
+		if channels[i] != nil {
+			channels[i].ActualBaseURL = nil
+		}
+	}
+}
+
 func clearChannelInfo(channel *model.Channel) {
 	if channel.ChannelInfo.IsMultiKey {
 		channel.ChannelInfo.MultiKeyDisabledReason = nil
@@ -165,6 +177,9 @@ func GetAllChannels(c *gin.Context) {
 
 	for _, datum := range channelData {
 		clearChannelInfo(datum)
+	}
+	if !isRoot(c) {
+		stripActualBaseURL(channelData)
 	}
 
 	countQuery := buildChannelListQuery(groupFilter, statusFilter, -1)
@@ -372,6 +387,9 @@ func SearchChannels(c *gin.Context) {
 	for _, datum := range pagedData {
 		clearChannelInfo(datum)
 	}
+	if !isRoot(c) {
+		stripActualBaseURL(pagedData)
+	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
@@ -398,6 +416,9 @@ func GetChannel(c *gin.Context) {
 	}
 	if channel != nil {
 		clearChannelInfo(channel)
+		if !isRoot(c) {
+			channel.ActualBaseURL = nil
+		}
 	}
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
@@ -598,6 +619,9 @@ func AddChannel(c *gin.Context) {
 	if err != nil {
 		common.ApiError(c, err)
 		return
+	}
+	if !isRoot(c) && addChannelRequest.Channel != nil {
+		addChannelRequest.Channel.ActualBaseURL = nil
 	}
 
 	// 使用统一的校验函数
@@ -903,6 +927,10 @@ func UpdateChannel(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	nonRoot := !isRoot(c)
+	if nonRoot {
+		channel.ActualBaseURL = nil
+	}
 
 	// 使用统一的校验函数
 	if err := validateChannel(&channel.Channel, false); err != nil {
@@ -1010,7 +1038,11 @@ func UpdateChannel(c *gin.Context) {
 			// 覆盖模式：直接使用新密钥（默认行为，不需要特殊处理）
 		}
 	}
-	err = channel.Update()
+	if nonRoot {
+		err = channel.Channel.UpdateWithOmit("ActualBaseURL")
+	} else {
+		err = channel.Channel.Update()
+	}
 	if err != nil {
 		common.ApiError(c, err)
 		return
