@@ -74,6 +74,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	var (
 		newAPIError *types.NewAPIError
 		ws          *websocket.Conn
+		relayInfo   *relaycommon.RelayInfo
 	)
 
 	if relayFormat == types.RelayFormatOpenAIRealtime {
@@ -89,7 +90,13 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	defer func() {
 		if newAPIError != nil {
 			logger.LogError(c, fmt.Sprintf("relay error: %s", common.LocalLogPreview(newAPIError.Error())))
-			newAPIError.SetMessage(common.MessageWithRequestId(newAPIError.Error(), requestId))
+			// Sanitize upstream URL before exposing to client. The server log
+			// above keeps the raw URL for Root troubleshooting.
+			msg := newAPIError.Error()
+			if relayInfo != nil && relayInfo.ChannelMeta != nil {
+				msg = service.SanitizeWithPair(relayInfo.ChannelBaseUrl, relayInfo.ChannelDisplayBaseUrl, msg)
+			}
+			newAPIError.SetMessage(common.MessageWithRequestId(msg, requestId))
 			switch relayFormat {
 			case types.RelayFormatOpenAIRealtime:
 				helper.WssError(c, ws, newAPIError.ToOpenAIError())
@@ -117,7 +124,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		return
 	}
 
-	relayInfo, err := relaycommon.GenRelayInfo(c, relayFormat, request, ws)
+	relayInfo, err = relaycommon.GenRelayInfo(c, relayFormat, request, ws)
 	if err != nil {
 		newAPIError = types.NewError(err, types.ErrorCodeGenRelayInfoFailed)
 		return
@@ -600,6 +607,9 @@ func RelayTask(c *gin.Context) {
 	}
 
 	if taskErr != nil {
+		if relayInfo != nil && relayInfo.ChannelMeta != nil {
+			taskErr.Message = service.SanitizeWithPair(relayInfo.ChannelBaseUrl, relayInfo.ChannelDisplayBaseUrl, taskErr.Message)
+		}
 		respondTaskError(c, taskErr)
 	}
 }

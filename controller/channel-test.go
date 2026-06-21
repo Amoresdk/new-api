@@ -173,7 +173,7 @@ func testChannel(channel *model.Channel, testUserID int, testModel string, endpo
 	//c.Request.Header.Set("Authorization", "Bearer "+channel.Key)
 	c.Request.Header.Set("Content-Type", "application/json")
 	c.Set("channel", channel.Type)
-	c.Set("base_url", channel.GetBaseURL())
+	c.Set("base_url", channel.GetRuntimeBaseURL())
 	group, _ := model.GetUserGroup(testUserID, false)
 	c.Set("group", group)
 
@@ -859,9 +859,13 @@ func TestChannel(c *gin.Context) {
 	tik := time.Now()
 	result := testChannel(channel, testUserID, testModel, endpointType, isStream)
 	if result.localErr != nil {
+		errMsg := result.localErr.Error()
+		if !isRoot(c) {
+			errMsg = service.SanitizeWithPair(channel.GetActualBaseURL(), channel.GetDisplayBaseURL(), errMsg)
+		}
 		resp := gin.H{
 			"success": false,
-			"message": result.localErr.Error(),
+			"message": errMsg,
 			"time":    0.0,
 		}
 		if result.newAPIError != nil {
@@ -875,9 +879,13 @@ func TestChannel(c *gin.Context) {
 	go channel.UpdateResponseTime(milliseconds)
 	consumedTime := float64(milliseconds) / 1000.0
 	if result.newAPIError != nil {
+		errMsg := result.newAPIError.Error()
+		if !isRoot(c) {
+			errMsg = service.SanitizeWithPair(channel.GetActualBaseURL(), channel.GetDisplayBaseURL(), errMsg)
+		}
 		c.JSON(http.StatusOK, gin.H{
 			"success":    false,
-			"message":    result.newAPIError.Error(),
+			"message":    errMsg,
 			"time":       consumedTime,
 			"error_code": result.newAPIError.GetErrorCode(),
 		})

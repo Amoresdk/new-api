@@ -248,9 +248,13 @@ func FetchUpstreamModels(c *gin.Context) {
 
 	ids, err := fetchChannelUpstreamModelIDs(channel)
 	if err != nil {
+		errMsg := err.Error()
+		if !isRoot(c) && channel != nil {
+			errMsg = service.SanitizeWithPair(channel.GetActualBaseURL(), channel.GetDisplayBaseURL(), errMsg)
+		}
 		c.JSON(http.StatusOK, gin.H{
 			"success": false,
-			"message": fmt.Sprintf("获取模型列表失败: %s", err.Error()),
+			"message": fmt.Sprintf("获取模型列表失败: %s", errMsg),
 		})
 		return
 	}
@@ -1890,10 +1894,11 @@ func OllamaPullModel(c *gin.Context) {
 	key := strings.Split(channel.Key, "\n")[0]
 	err = ollama.PullOllamaModel(baseURL, key, req.ModelName)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"success": false,
-			"message": fmt.Sprintf("Failed to pull model: %s", err.Error()),
-		})
+		errMsg := err.Error()
+		if !isRoot(c) && channel != nil {
+			errMsg = service.SanitizeWithPair(channel.GetActualBaseURL(), channel.GetDisplayBaseURL(), errMsg)
+		}
+		common.ApiErrorMsg(c, fmt.Sprintf("Failed to pull model: %s", errMsg))
 		return
 	}
 
@@ -1969,8 +1974,12 @@ func OllamaPullModelStream(c *gin.Context) {
 	err = ollama.PullOllamaModelStream(baseURL, key, req.ModelName, progressCallback)
 
 	if err != nil {
+		errMsg := err.Error()
+		if !isRoot(c) && channel != nil {
+			errMsg = service.SanitizeWithPair(channel.GetActualBaseURL(), channel.GetDisplayBaseURL(), errMsg)
+		}
 		errorData, _ := json.Marshal(gin.H{
-			"error": err.Error(),
+			"error": errMsg,
 		})
 		fmt.Fprintf(c.Writer, "data: %s\n\n", string(errorData))
 	} else {
@@ -2035,10 +2044,11 @@ func OllamaDeleteModel(c *gin.Context) {
 	key := strings.Split(channel.Key, "\n")[0]
 	err = ollama.DeleteOllamaModel(baseURL, key, req.ModelName)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"success": false,
-			"message": fmt.Sprintf("Failed to delete model: %s", err.Error()),
-		})
+		errMsg := err.Error()
+		if !isRoot(c) && channel != nil {
+			errMsg = service.SanitizeWithPair(channel.GetActualBaseURL(), channel.GetDisplayBaseURL(), errMsg)
+		}
+		common.ApiErrorMsg(c, fmt.Sprintf("Failed to delete model: %s", errMsg))
 		return
 	}
 
@@ -2084,9 +2094,13 @@ func OllamaVersion(c *gin.Context) {
 	key := strings.Split(channel.Key, "\n")[0]
 	version, err := ollama.FetchOllamaVersion(baseURL, key)
 	if err != nil {
+		errMsg := err.Error()
+		if !isRoot(c) && channel != nil {
+			errMsg = service.SanitizeWithPair(channel.GetActualBaseURL(), channel.GetDisplayBaseURL(), errMsg)
+		}
 		c.JSON(http.StatusOK, gin.H{
 			"success": false,
-			"message": fmt.Sprintf("获取Ollama版本失败: %s", err.Error()),
+			"message": fmt.Sprintf("获取Ollama版本失败: %s", errMsg),
 		})
 		return
 	}

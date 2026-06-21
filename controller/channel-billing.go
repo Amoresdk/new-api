@@ -441,7 +441,11 @@ func UpdateChannelBalance(c *gin.Context) {
 	}
 	balance, err := updateChannelBalance(channel)
 	if err != nil {
-		common.ApiError(c, err)
+		errMsg := err.Error()
+		if !isRoot(c) && channel != nil {
+			errMsg = service.SanitizeWithPair(channel.GetActualBaseURL(), channel.GetDisplayBaseURL(), errMsg)
+		}
+		common.ApiErrorMsg(c, errMsg)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
