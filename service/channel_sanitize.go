@@ -28,7 +28,12 @@ func SanitizeWithPair(actual, display, msg string) string {
 	au, auErr := url.Parse(actual)
 	du, duErr := url.Parse(display)
 	if auErr != nil || au.Host == "" || duErr != nil || du.Host == "" {
-		return strings.ReplaceAll(msg, actual, display)
+		result := strings.ReplaceAll(msg, actual, display)
+		// also strip the bare host when actual host is known but display has no host
+		if auErr == nil && au.Host != "" && (duErr != nil || du.Host == "") {
+			result = strings.ReplaceAll(result, au.Host, "")
+		}
+		return result
 	}
 	transformedActual := strings.ReplaceAll(actual, au.Host, du.Host)
 	hostReplaced := strings.ReplaceAll(msg, au.Host, du.Host)

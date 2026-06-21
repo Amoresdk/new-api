@@ -1080,6 +1080,9 @@ func UpdateChannel(c *gin.Context) {
 	})
 	channel.Key = ""
 	clearChannelInfo(&channel.Channel)
+	if nonRoot {
+		channel.ActualBaseURL = nil
+	}
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
