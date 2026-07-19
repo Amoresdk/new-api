@@ -43,6 +43,26 @@ type agentRefundOrderTotals struct {
 	Amount int64
 }
 
+func agentRefundCodeCAS(tx *gorm.DB, code model.Redemption, now int64) *gorm.DB {
+	conditions := map[string]any{
+		"id":                   code.Id,
+		"type":                 code.Type,
+		"user_id":              code.UserId,
+		"agent_user_id":        code.AgentUserId,
+		"agent_order_id":       code.AgentOrderId,
+		"subscription_plan_id": code.SubscriptionPlanId,
+		"key":                  code.Key,
+		"name":                 code.Name,
+		"status":               code.Status,
+		"used_user_id":         code.UsedUserId,
+		"redeemed_time":        code.RedeemedTime,
+	}
+	return tx.Model(&model.Redemption{}).
+		Where(conditions).
+		Where("expired_time > ?", now).
+		UpdateColumn("status", common.RedemptionCodeStatusRefunded)
+}
+
 func RefundAgentCodes(input AgentRefundInput) (*AgentRefundResult, error) {
 	input.IdempotencyKey = strings.TrimSpace(input.IdempotencyKey)
 	ids, snapshot, requestHash, err := canonicalAgentRefundRequest(input)
@@ -200,12 +220,7 @@ func RefundAgentCodes(input AgentRefundInput) (*AgentRefundResult, error) {
 		}
 
 		for _, code := range codes {
-			codeUpdate := tx.Model(&model.Redemption{}).
-				Where("id = ? AND type = ? AND user_id = ? AND agent_user_id = ? AND agent_order_id = ? AND subscription_plan_id = ?", code.Id,
-					common.RedemptionCodeTypeSubscription, input.AgentUserID, input.AgentUserID, code.AgentOrderId, code.SubscriptionPlanId).
-				Where("key = ? AND name = ? AND status = ? AND expired_time > ? AND used_user_id = ? AND redeemed_time = ?",
-					code.Key, code.Name, common.RedemptionCodeStatusEnabled, now, 0, 0).
-				UpdateColumn("status", common.RedemptionCodeStatusRefunded)
+			codeUpdate := agentRefundCodeCAS(tx, code, now)
 			if codeUpdate.Error != nil {
 				return codeUpdate.Error
 			}

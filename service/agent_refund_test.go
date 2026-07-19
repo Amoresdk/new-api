@@ -16,6 +16,7 @@ import (
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
 )
 
@@ -287,6 +288,32 @@ func TestRefundAgentCodesConditionalCASRejectsConcurrentCodeTampering(t *testing
 	require.NoError(t, model.DB.Model(&model.AgentCreditLog{}).Where("event_type = ?", model.AgentCreditEventRefund).Count(&refunds).Error)
 	assert.Zero(t, requests)
 	assert.Zero(t, refunds)
+}
+
+func TestAgentRefundCodeCASQuotesReservedKeyForMySQL(t *testing.T) {
+	db, err := gorm.Open(mysql.New(mysql.Config{
+		DSN:                       "gorm:gorm@tcp(localhost:9910)/gorm?charset=utf8&parseTime=True&loc=Local",
+		SkipInitializeWithVersion: true,
+	}), &gorm.Config{DryRun: true, DisableAutomaticPing: true, SkipDefaultTransaction: true})
+	require.NoError(t, err)
+
+	code := model.Redemption{
+		Id: 1, UserId: 2, AgentUserId: 2, AgentOrderId: 3, SubscriptionPlanId: 4,
+		Type: common.RedemptionCodeTypeSubscription, Key: "package-code", Name: "Plan",
+		Status: common.RedemptionCodeStatusEnabled, ExpiredTime: 200,
+	}
+	statement := agentRefundCodeCAS(db, code, 100).Statement
+	require.NoError(t, statement.Error)
+
+	sql := statement.SQL.String()
+	assert.Contains(t, sql, "`key` = ?")
+	for _, column := range []string{
+		"`id`", "`type`", "`user_id`", "`agent_user_id`", "`agent_order_id`",
+		"`subscription_plan_id`", "`name`", "`status`", "`used_user_id`", "`redeemed_time`",
+	} {
+		assert.Contains(t, sql, column+" = ?")
+	}
+	assert.Contains(t, sql, "expired_time > ?")
 }
 
 func TestRefundAgentCodesIdempotencyResolvesBeforeCurrentState(t *testing.T) {
