@@ -49,8 +49,8 @@ import type {
 } from '@/features/agents/types'
 
 import {
-  agentAdminQueryKeys,
   createCreditAttempt,
+  getAgentAdminInvalidationPlan,
   projectAgentBalance,
   type CreditAttempt,
 } from '../lib/admin'
@@ -100,23 +100,13 @@ export function CreditAdjustmentDialog(props: CreditAdjustmentDialogProps) {
       setAttempt(undefined)
       setReviewing(false)
       toast.success(t('Agent balance adjusted'))
-      await Promise.all([
-        queryClient.invalidateQueries({
-          queryKey: agentAdminQueryKeys.agentsRoot(props.scope),
-        }),
-        queryClient.invalidateQueries({
-          queryKey: agentAdminQueryKeys.ledgerRoot(
-            props.scope,
-            props.agent.user_id
-          ),
-        }),
-        queryClient.invalidateQueries({
-          queryKey: agentAdminQueryKeys.reconciliation(
-            props.scope,
-            props.agent.user_id
-          ),
-        }),
-      ])
+      await Promise.all(
+        getAgentAdminInvalidationPlan(
+          'credit',
+          props.scope,
+          props.agent.user_id
+        ).map((queryKey) => queryClient.invalidateQueries({ queryKey }))
+      )
     },
     onError: () => toast.error(t('Failed to adjust agent balance')),
   })

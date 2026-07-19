@@ -45,12 +45,17 @@ import {
   refundAdminAgentCodes,
 } from '@/features/agents/api'
 import { AgentTableShell } from '@/features/agents/components/agent-table-shell'
-import { AgentIdempotencyKeyStore } from '@/features/agents/lib/workspace'
+import { deriveAgentCodeStatus } from '@/features/agents/lib/money'
+import {
+  AgentIdempotencyKeyStore,
+  isRefundableAgentCode,
+} from '@/features/agents/lib/workspace'
 import type { AgentCode, AgentRefundResponse } from '@/features/agents/types'
 
 import {
   agentAdminQueryKeys,
-  getRefundSelection,
+  getAdminRefundSelection,
+  getAgentAdminInvalidationPlan,
   type AgentAdminSearch,
 } from '../lib/admin'
 
@@ -93,20 +98,26 @@ export function AgentCodesTable(props: AgentCodesTableProps) {
       return response.data
     },
   })
-  const selectedAgentID = selected.values().next().value?.agent_user_id as
-    | number
-    | undefined
+  const refundableSelection = new Map(
+    [...selected].filter(([, code]) => isRefundableAgentCode(code))
+  )
+  const selectedAgentID = refundableSelection.values().next().value
+    ?.agent_user_id as number | undefined
   const canSelect = useCallback(
     (code: AgentCode) =>
       props.canMutate &&
-      code.status === 'unused' &&
+      isRefundableAgentCode(code) &&
       (selectedAgentID === undefined || selectedAgentID === code.agent_user_id),
     [props.canMutate, selectedAgentID]
   )
   const toggle = useCallback(
     (code: AgentCode, checked: boolean) => {
       setSelected((current) => {
-        const next = new Map(current)
+        const next = new Map(
+          [...current].filter(([, candidate]) =>
+            isRefundableAgentCode(candidate)
+          )
+        )
         if (!checked) {
           next.delete(code.id)
           return next
@@ -115,7 +126,7 @@ export function AgentCodesTable(props: AgentCodesTableProps) {
           | number
           | undefined
         if (
-          code.status !== 'unused' ||
+          !isRefundableAgentCode(code) ||
           (currentAgentID !== undefined &&
             currentAgentID !== code.agent_user_id)
         ) {
@@ -151,10 +162,7 @@ export function AgentCodesTable(props: AgentCodesTableProps) {
                   <Checkbox
                     aria-label={t('Select code for special refund')}
                     checked={meta.selected.has(row.original.id)}
-                    disabled={
-                      !meta.canSelect(row.original) &&
-                      !meta.selected.has(row.original.id)
-                    }
+                    disabled={!meta.canSelect(row.original)}
                     onCheckedChange={(value) =>
                       meta.toggle(row.original, value === true)
                     }
@@ -205,6 +213,10 @@ export function AgentCodesTable(props: AgentCodesTableProps) {
         accessorKey: 'status',
         header: t('Status'),
         cell: ({ row }) => {
+          const status = deriveAgentCodeStatus(
+            row.original.status,
+            row.original.expired_at
+          )
           const labels = {
             unused: t('Unused'),
             used: t('Used'),
@@ -212,12 +224,8 @@ export function AgentCodesTable(props: AgentCodesTableProps) {
             expired: t('Expired'),
           }
           return (
-            <Badge
-              variant={
-                row.original.status === 'unused' ? 'secondary' : 'outline'
-              }
-            >
-              {labels[row.original.status]}
+            <Badge variant={status === 'unused' ? 'secondary' : 'outline'}>
+              {labels[status]}
             </Badge>
           )
         },
@@ -238,7 +246,11 @@ export function AgentCodesTable(props: AgentCodesTableProps) {
     manualPagination: true,
     rowCount: query.data?.total ?? 0,
     getRowId: (row) => row.id.toString(),
-    meta: { selected, canSelect, toggle } satisfies CodeTableMeta,
+    meta: {
+      selected: refundableSelection,
+      canSelect,
+      toggle,
+    } satisfies CodeTableMeta,
   })
   const changeFilters = (updates: Partial<AgentAdminSearch>) => {
     setSelected(new Map())
@@ -330,17 +342,19 @@ export function AgentCodesTable(props: AgentCodesTableProps) {
             <Button
               type='button'
               variant='destructive'
-              disabled={selected.size === 0}
+              disabled={refundableSelection.size === 0}
               onClick={() => setRefundOpen(true)}
             >
-              {t('Special refund ({{count}})', { count: selected.size })}
+              {t('Special refund ({{count}})', {
+                count: refundableSelection.size,
+              })}
             </Button>
           ) : undefined
         }
       />
       <SpecialRefundDialog
         scope={props.scope}
-        selection={[...selected.values()]}
+        selection={[...refundableSelection.values()]}
         open={refundOpen}
         onOpenChange={setRefundOpen}
         onRefunded={(ids) =>
@@ -363,66 +377,54 @@ type SpecialRefundDialogProps = {
   onRefunded: (ids: number[]) => void
 }
 
+type RefundSubmission = NonNullable<ReturnType<typeof getAdminRefundSelection>>
+
 function SpecialRefundDialog(props: SpecialRefundDialogProps) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
   const keyStore = useRef(new AgentIdempotencyKeyStore())
   const [result, setResult] = useState<AgentRefundResponse | null>(null)
-  const refundSelection = getRefundSelection(
-    props.selection.map((code) => ({
-      id: code.id,
-      agentUserID: code.agent_user_id,
-      status: code.status,
-    }))
-  )
+  const [submittedSelection, setSubmittedSelection] =
+    useState<RefundSubmission | null>(null)
+  const currentRefundSelection = getAdminRefundSelection(props.selection)
+  const displaySelection = submittedSelection ?? currentRefundSelection
   const mutation = useMutation({
     mutationFn: async () => {
-      if (!refundSelection) throw new Error('Invalid refund selection')
-      const redemptionIDs = [...refundSelection.redemptionIDs].sort(
+      const submission = getAdminRefundSelection(
+        props.selection,
+        Math.floor(Date.now() / 1000)
+      )
+      if (!submission) throw new Error('Invalid refund selection')
+      const immutableSubmission: RefundSubmission = {
+        agentUserID: submission.agentUserID,
+        redemptionIDs: [...submission.redemptionIDs],
+      }
+      setSubmittedSelection(immutableSubmission)
+      const redemptionIDs = [...immutableSubmission.redemptionIDs].sort(
         (left, right) => left - right
       )
       const response = await refundAdminAgentCodes({
-        agent_user_id: refundSelection.agentUserID,
+        agent_user_id: immutableSubmission.agentUserID,
         redemption_ids: redemptionIDs,
         idempotency_key: keyStore.current.keyFor(
-          `${refundSelection.agentUserID}:${redemptionIDs.join(',')}`
+          `${immutableSubmission.agentUserID}:${redemptionIDs.join(',')}`
         ),
       })
       if (!response.success) throw new Error(response.message)
-      return response.data
+      return { result: response.data, submission: immutableSubmission }
     },
     onSuccess: async (data) => {
       keyStore.current.complete()
-      setResult(data)
-      props.onRefunded(data.redemption_ids)
+      setResult(data.result)
+      props.onRefunded(data.result.redemption_ids)
       toast.success(t('Special refund completed'))
-      await Promise.all([
-        queryClient.invalidateQueries({
-          queryKey: agentAdminQueryKeys.codesRoot(props.scope),
-        }),
-        queryClient.invalidateQueries({
-          queryKey: agentAdminQueryKeys.ordersRoot(props.scope),
-        }),
-        queryClient.invalidateQueries({
-          queryKey: agentAdminQueryKeys.agentsRoot(props.scope),
-        }),
-        refundSelection
-          ? queryClient.invalidateQueries({
-              queryKey: agentAdminQueryKeys.ledgerRoot(
-                props.scope,
-                refundSelection.agentUserID
-              ),
-            })
-          : Promise.resolve(),
-        refundSelection
-          ? queryClient.invalidateQueries({
-              queryKey: agentAdminQueryKeys.reconciliation(
-                props.scope,
-                refundSelection.agentUserID
-              ),
-            })
-          : Promise.resolve(),
-      ])
+      await Promise.all(
+        getAgentAdminInvalidationPlan(
+          'refund',
+          props.scope,
+          data.submission.agentUserID
+        ).map((queryKey) => queryClient.invalidateQueries({ queryKey }))
+      )
     },
     onError: () => toast.error(t('Failed to refund selected package codes')),
   })
@@ -432,6 +434,7 @@ function SpecialRefundDialog(props: SpecialRefundDialogProps) {
       mutation.reset()
       keyStore.current.complete()
       setResult(null)
+      setSubmittedSelection(null)
     }
     props.onOpenChange(open)
   }
@@ -448,8 +451,8 @@ function SpecialRefundDialog(props: SpecialRefundDialogProps) {
             {t(
               'Refund {{count}} selected unused codes for agent user #{{id}}. The server applies the saved order terms.',
               {
-                count: refundSelection?.redemptionIDs.length ?? 0,
-                id: refundSelection?.agentUserID ?? 0,
+                count: displaySelection?.redemptionIDs.length ?? 0,
+                id: displaySelection?.agentUserID ?? 0,
               }
             )}
           </DialogDescription>
@@ -502,7 +505,7 @@ function SpecialRefundDialog(props: SpecialRefundDialogProps) {
             <Button
               type='button'
               variant='destructive'
-              disabled={!refundSelection || mutation.isPending}
+              disabled={!currentRefundSelection || mutation.isPending}
               onClick={() => mutation.mutate()}
             >
               {mutation.isPending && <Spinner data-icon='inline-start' />}

@@ -44,7 +44,10 @@ import { upsertAgentOffer } from '@/features/agents/api'
 import type { AgentOffer } from '@/features/agents/types'
 
 import type { AgentAdminPlan } from '../api'
-import { agentAdminQueryKeys, validateAgentOfferDraft } from '../lib/admin'
+import {
+  getAgentAdminInvalidationPlan,
+  validateAgentOfferDraft,
+} from '../lib/admin'
 
 type AgentOfferDialogProps = {
   plan: AgentAdminPlan
@@ -100,9 +103,11 @@ export function AgentOfferDialog(props: AgentOfferDialogProps) {
     },
     onSuccess: async () => {
       toast.success(t('Agent offer saved'))
-      await queryClient.invalidateQueries({
-        queryKey: agentAdminQueryKeys.offers(props.scope),
-      })
+      await Promise.all(
+        getAgentAdminInvalidationPlan('offer', props.scope, 0).map((queryKey) =>
+          queryClient.invalidateQueries({ queryKey })
+        )
+      )
       props.onOpenChange(false)
     },
     onError: () => toast.error(t('Failed to save agent offer')),

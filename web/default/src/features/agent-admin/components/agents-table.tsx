@@ -54,7 +54,11 @@ import {
 import { AgentTableShell } from '@/features/agents/components/agent-table-shell'
 import type { AdminAgent } from '@/features/agents/types'
 
-import { agentAdminQueryKeys, type AgentAdminSearch } from '../lib/admin'
+import {
+  agentAdminQueryKeys,
+  getAgentAdminInvalidationPlan,
+  type AgentAdminSearch,
+} from '../lib/admin'
 import { AgentLimitDialog } from './agent-limit-dialog'
 import { CreditAdjustmentDialog } from './credit-adjustment-dialog'
 
@@ -113,11 +117,15 @@ export function AgentsTable(props: AgentsTableProps) {
       if (!response.success) throw new Error(response.message)
       return response.data
     },
-    onSuccess: async () => {
+    onSuccess: async (data) => {
       toast.success(t('Agent status updated'))
-      await queryClient.invalidateQueries({
-        queryKey: agentAdminQueryKeys.agentsRoot(props.scope),
-      })
+      await Promise.all(
+        getAgentAdminInvalidationPlan(
+          'lifecycle',
+          props.scope,
+          data.user_id
+        ).map((queryKey) => queryClient.invalidateQueries({ queryKey }))
+      )
       setLifecycleAgent(null)
     },
     onError: () => toast.error(t('Failed to update agent status')),
@@ -129,17 +137,40 @@ export function AgentsTable(props: AgentsTableProps) {
       if (!response.success) throw new Error(response.message)
       return response.data
     },
-    onSuccess: async () => {
+    onSuccess: async (data) => {
       toast.success(t('Agent enabled'))
-      await queryClient.invalidateQueries({
-        queryKey: agentAdminQueryKeys.agentsRoot(props.scope),
-      })
+      await Promise.all(
+        getAgentAdminInvalidationPlan(
+          'lifecycle',
+          props.scope,
+          data.user_id
+        ).map((queryKey) => queryClient.invalidateQueries({ queryKey }))
+      )
       setEnableOpen(false)
       setEnableUserID('')
       setEnableSubmitted(false)
     },
     onError: () => toast.error(t('Failed to enable agent')),
   })
+
+  const openLifecycle = (agent: AdminAgent) => {
+    lifecycleMutation.reset()
+    setLifecycleAgent(agent)
+  }
+
+  const closeLifecycle = () => {
+    if (lifecycleMutation.isPending) return
+    lifecycleMutation.reset()
+    setLifecycleAgent(null)
+  }
+
+  const changeEnableOpen = (open: boolean) => {
+    if (enableMutation.isPending) return
+    enableMutation.reset()
+    setEnableUserID('')
+    setEnableSubmitted(false)
+    setEnableOpen(open)
+  }
 
   const columns = useMemo<ColumnDef<AdminAgent>[]>(
     () => [
@@ -262,13 +293,16 @@ export function AgentsTable(props: AgentsTableProps) {
       canMutate: props.canMutate,
       openCredit: setCreditAgent,
       openLimit: setLimitAgent,
-      openLifecycle: setLifecycleAgent,
+      openLifecycle,
       openReconciliation: setReconciliationAgent,
       openLedger: (agent) =>
         props.onSearchChange({
           tab: 'ledger',
           agent_user_id: agent.user_id,
           p: 1,
+          keyword: undefined,
+          plan_id: undefined,
+          order_id: undefined,
           status: undefined,
         }),
     } satisfies AgentTableMeta,
@@ -350,7 +384,7 @@ export function AgentsTable(props: AgentsTableProps) {
         }
         actions={
           props.canMutate ? (
-            <Button type='button' onClick={() => setEnableOpen(true)}>
+            <Button type='button' onClick={() => changeEnableOpen(true)}>
               {t('Enable user as agent')}
             </Button>
           ) : undefined
@@ -378,9 +412,7 @@ export function AgentsTable(props: AgentsTableProps) {
 
       <Dialog
         open={Boolean(lifecycleAgent)}
-        onOpenChange={(open) =>
-          !open && !lifecycleMutation.isPending && setLifecycleAgent(null)
-        }
+        onOpenChange={(open) => !open && closeLifecycle()}
       >
         <DialogContent
           className='sm:max-w-md'
@@ -407,7 +439,7 @@ export function AgentsTable(props: AgentsTableProps) {
               type='button'
               variant='outline'
               disabled={lifecycleMutation.isPending}
-              onClick={() => setLifecycleAgent(null)}
+              onClick={closeLifecycle}
             >
               {t('Cancel')}
             </Button>
@@ -432,12 +464,7 @@ export function AgentsTable(props: AgentsTableProps) {
         </DialogContent>
       </Dialog>
 
-      <Dialog
-        open={enableOpen}
-        onOpenChange={(open) =>
-          !enableMutation.isPending && setEnableOpen(open)
-        }
-      >
+      <Dialog open={enableOpen} onOpenChange={changeEnableOpen}>
         <DialogContent
           className='sm:max-w-md'
           showCloseButton={!enableMutation.isPending}
@@ -476,7 +503,7 @@ export function AgentsTable(props: AgentsTableProps) {
               type='button'
               variant='outline'
               disabled={enableMutation.isPending}
-              onClick={() => setEnableOpen(false)}
+              onClick={() => changeEnableOpen(false)}
             >
               {t('Cancel')}
             </Button>

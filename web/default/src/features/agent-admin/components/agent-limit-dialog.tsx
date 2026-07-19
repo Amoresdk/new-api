@@ -43,7 +43,7 @@ import { Spinner } from '@/components/ui/spinner'
 import { updateAgentDailyLimit } from '@/features/agents/api'
 import type { AdminAgent } from '@/features/agents/types'
 
-import { agentAdminQueryKeys } from '../lib/admin'
+import { getAgentAdminInvalidationPlan } from '../lib/admin'
 
 const formSchema = z.object({ daily_code_limit: z.number().int().positive() })
 type FormValues = z.infer<typeof formSchema>
@@ -70,9 +70,13 @@ export function AgentLimitDialog(props: AgentLimitDialogProps) {
     },
     onSuccess: async () => {
       toast.success(t('Agent daily limit updated'))
-      await queryClient.invalidateQueries({
-        queryKey: agentAdminQueryKeys.agentsRoot(props.scope),
-      })
+      await Promise.all(
+        getAgentAdminInvalidationPlan(
+          'limit',
+          props.scope,
+          props.agent.user_id
+        ).map((queryKey) => queryClient.invalidateQueries({ queryKey }))
+      )
       props.onOpenChange(false)
     },
     onError: () => toast.error(t('Failed to update agent daily limit')),

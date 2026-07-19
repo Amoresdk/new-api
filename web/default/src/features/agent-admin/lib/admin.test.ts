@@ -19,15 +19,46 @@ For commercial licensing, please contact support@quantumnous.com
 import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
 
+import { agentAccessQueryKey } from '@/features/agents/hooks/use-agent-access'
+import {
+  agentQueryKeys,
+  agentUserQueryKey,
+} from '@/features/agents/lib/workspace'
+import type { AgentCode } from '@/features/agents/types'
+
 import {
   agentAdminQueryKeys,
   agentAdminSearchSchema,
   createCreditAttempt,
   getAgentAdminAccess,
-  getRefundSelection,
+  getAgentAdminInvalidationPlan,
+  getAdminRefundSelection,
   projectAgentBalance,
   validateAgentOfferDraft,
 } from './admin'
+
+function refundCode(
+  id: number,
+  agentUserID: number,
+  expiredAt: number,
+  status: AgentCode['status'] = 'unused'
+): AgentCode {
+  return {
+    id,
+    code: `code-${id}`,
+    agent_user_id: agentUserID,
+    order_id: 1,
+    order_no: 'order-1',
+    plan_id: 1,
+    plan_title: 'Plan',
+    status,
+    code_visible: true,
+    used_user_id: 0,
+    created_at: 1,
+    expired_at: expiredAt,
+    redeemed_at: 0,
+  }
+}
 
 describe('agent administration cache scope', () => {
   test('keeps mutation invalidation inside the signed-in admin and affected resource', () => {
@@ -46,6 +77,48 @@ describe('agent administration cache scope', () => {
       'agent-admin',
       41,
       'codes',
+    ])
+  })
+
+  test('targets current agent workspace caches only when the mutation affects that user', () => {
+    assert.deepEqual(getAgentAdminInvalidationPlan('offer', 41, 0), [
+      agentAdminQueryKeys.offers(41),
+      agentQueryKeys.offers,
+    ])
+    assert.deepEqual(getAgentAdminInvalidationPlan('credit', 41, 9), [
+      agentAdminQueryKeys.agentsRoot(41),
+      agentAdminQueryKeys.ledgerRoot(41, 9),
+      agentAdminQueryKeys.reconciliation(41, 9),
+    ])
+    assert.deepEqual(getAgentAdminInvalidationPlan('limit', 41, 41), [
+      agentAdminQueryKeys.agentsRoot(41),
+      agentUserQueryKey(agentQueryKeys.overview, 41),
+    ])
+    assert.deepEqual(getAgentAdminInvalidationPlan('lifecycle', 41, 9), [
+      agentAdminQueryKeys.agentsRoot(41),
+    ])
+    assert.deepEqual(getAgentAdminInvalidationPlan('lifecycle', 41, 41), [
+      agentAdminQueryKeys.agentsRoot(41),
+      agentUserQueryKey(agentQueryKeys.overview, 41),
+      agentAccessQueryKey(41),
+    ])
+    assert.deepEqual(getAgentAdminInvalidationPlan('credit', 41, 41), [
+      agentAdminQueryKeys.agentsRoot(41),
+      agentAdminQueryKeys.ledgerRoot(41, 41),
+      agentAdminQueryKeys.reconciliation(41, 41),
+      agentUserQueryKey(agentQueryKeys.overview, 41),
+      agentUserQueryKey(agentQueryKeys.creditLogs, 41),
+    ])
+    assert.deepEqual(getAgentAdminInvalidationPlan('refund', 41, 41), [
+      agentAdminQueryKeys.codesRoot(41),
+      agentAdminQueryKeys.ordersRoot(41),
+      agentAdminQueryKeys.agentsRoot(41),
+      agentAdminQueryKeys.ledgerRoot(41, 41),
+      agentAdminQueryKeys.reconciliation(41, 41),
+      agentUserQueryKey(agentQueryKeys.overview, 41),
+      agentUserQueryKey(agentQueryKeys.orders, 41),
+      agentUserQueryKey(agentQueryKeys.codes, 41),
+      agentUserQueryKey(agentQueryKeys.creditLogs, 41),
     ])
   })
 })
@@ -148,22 +221,31 @@ describe('offer and refund boundaries', () => {
   })
 
   test('permits a special refund only for unused codes owned by one agent', () => {
-    const result = getRefundSelection([
-      { id: 11, agentUserID: 7, status: 'unused' },
-      { id: 12, agentUserID: 7, status: 'unused' },
-    ])
+    const result = getAdminRefundSelection(
+      [refundCode(11, 7, 1001), refundCode(12, 7, 1002)],
+      1000
+    )
     assert.deepEqual(result, { agentUserID: 7, redemptionIDs: [11, 12] })
     assert.equal(
-      getRefundSelection([
-        { id: 11, agentUserID: 7, status: 'unused' },
-        { id: 12, agentUserID: 8, status: 'unused' },
-      ]),
+      getAdminRefundSelection(
+        [refundCode(11, 7, 1001), refundCode(12, 8, 1002)],
+        1000
+      ),
       null
     )
     assert.equal(
-      getRefundSelection([{ id: 11, agentUserID: 7, status: 'used' }]),
+      getAdminRefundSelection([refundCode(11, 7, 1001, 'used')], 1000),
       null
     )
+  })
+
+  test('rejects unused codes at and before the expiry boundary', () => {
+    assert.equal(getAdminRefundSelection([refundCode(11, 7, 1000)], 1000), null)
+    assert.equal(getAdminRefundSelection([refundCode(11, 7, 999)], 1000), null)
+    assert.deepEqual(getAdminRefundSelection([refundCode(11, 7, 1001)], 1000), {
+      agentUserID: 7,
+      redemptionIDs: [11],
+    })
   })
 })
 

@@ -3,6 +3,7 @@ package controller
 import (
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
@@ -12,6 +13,19 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestAgentAdminResponseNormalizesDailyUsageToServerLocalDate(t *testing.T) {
+	today := time.Now().In(time.Local).Format("2006-01-02")
+	current := agentAccountResponse(model.AgentAccount{
+		DailyCountDate: today, DailyCodeCount: 7, DailyCodeLimit: 20,
+	}, "", "")
+	stale := agentAccountResponse(model.AgentAccount{
+		DailyCountDate: "2000-01-01", DailyCodeCount: 19, DailyCodeLimit: 20,
+	}, "", "")
+
+	assert.Equal(t, 7, current.DailyCodeCount)
+	assert.Zero(t, stale.DailyCodeCount)
+}
 
 func TestAgentAdminResponseFormatsMoneyAsStrings(t *testing.T) {
 	account := agentAccountResponse(model.AgentAccount{Balance: 123456}, "agent", "Agent")

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
@@ -294,6 +295,10 @@ func agentAdminUserID(c *gin.Context) (int, error) {
 }
 
 func agentAccountResponse(account model.AgentAccount, username string, displayName string) dto.AgentAccountResponse {
+	dailyCodeCount := 0
+	if account.DailyCountDate == time.Now().In(time.Local).Format("2006-01-02") {
+		dailyCodeCount = account.DailyCodeCount
+	}
 	return dto.AgentAccountResponse{
 		Id:             account.Id,
 		UserId:         account.UserId,
@@ -303,7 +308,7 @@ func agentAccountResponse(account model.AgentAccount, username string, displayNa
 		Balance:        service.FormatAgentPoints(account.Balance),
 		DailyCodeLimit: account.DailyCodeLimit,
 		DailyCountDate: account.DailyCountDate,
-		DailyCodeCount: account.DailyCodeCount,
+		DailyCodeCount: dailyCodeCount,
 		Version:        account.Version,
 		CreatedAt:      account.CreatedAt,
 		UpdatedAt:      account.UpdatedAt,

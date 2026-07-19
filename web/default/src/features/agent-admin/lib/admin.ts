@@ -18,6 +18,13 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { z } from 'zod'
 
+import { agentAccessQueryKey } from '@/features/agents/hooks/use-agent-access'
+import {
+  agentQueryKeys,
+  agentUserQueryKey,
+  isRefundableAgentCode,
+} from '@/features/agents/lib/workspace'
+import type { AgentCode } from '@/features/agents/types'
 import { ROLE } from '@/lib/roles'
 
 const positiveInteger = z.number().int().positive()
@@ -166,13 +173,10 @@ export function validateAgentOfferDraft(input: {
   )
 }
 
-type RefundCandidate = {
-  id: number
-  agentUserID: number
-  status: string
-}
-
-export function getRefundSelection(candidates: RefundCandidate[]): {
+export function getAdminRefundSelection(
+  candidates: AgentCode[],
+  nowSeconds: number = Math.floor(Date.now() / 1000)
+): {
   agentUserID: number
   redemptionIDs: number[]
 } | null {
@@ -180,8 +184,9 @@ export function getRefundSelection(candidates: RefundCandidate[]): {
   if (
     !first ||
     first.id <= 0 ||
-    first.agentUserID <= 0 ||
-    first.status !== 'unused'
+    first.agent_user_id <= 0 ||
+    candidates.length > 100 ||
+    !isRefundableAgentCode(first, nowSeconds)
   ) {
     return null
   }
@@ -189,15 +194,18 @@ export function getRefundSelection(candidates: RefundCandidate[]): {
   for (const candidate of candidates) {
     if (
       candidate.id <= 0 ||
-      candidate.agentUserID !== first.agentUserID ||
-      candidate.status !== 'unused' ||
+      candidate.agent_user_id !== first.agent_user_id ||
+      !isRefundableAgentCode(candidate, nowSeconds) ||
       redemptionIDs.has(candidate.id)
     ) {
       return null
     }
     redemptionIDs.add(candidate.id)
   }
-  return { agentUserID: first.agentUserID, redemptionIDs: [...redemptionIDs] }
+  return {
+    agentUserID: first.agent_user_id,
+    redemptionIDs: [...redemptionIDs],
+  }
 }
 
 export const agentAdminQueryKeys = {
@@ -220,4 +228,57 @@ export const agentAdminQueryKeys = {
     ['agent-admin', scope, 'ledger', userID] as const,
   reconciliation: (scope: number, userID: number) =>
     ['agent-admin', scope, 'reconciliation', userID] as const,
+}
+
+export type AgentAdminMutationKind =
+  | 'offer'
+  | 'lifecycle'
+  | 'limit'
+  | 'credit'
+  | 'refund'
+
+export function getAgentAdminInvalidationPlan(
+  kind: AgentAdminMutationKind,
+  currentUserID: number,
+  affectedAgentUserID: number
+): readonly (readonly unknown[])[] {
+  if (kind === 'offer') {
+    return [agentAdminQueryKeys.offers(currentUserID), agentQueryKeys.offers]
+  }
+
+  const plan: (readonly unknown[])[] = [
+    agentAdminQueryKeys.agentsRoot(currentUserID),
+  ]
+  if (kind === 'credit' || kind === 'refund') {
+    if (kind === 'refund') {
+      plan.unshift(
+        agentAdminQueryKeys.codesRoot(currentUserID),
+        agentAdminQueryKeys.ordersRoot(currentUserID)
+      )
+    }
+    plan.push(
+      agentAdminQueryKeys.ledgerRoot(currentUserID, affectedAgentUserID),
+      agentAdminQueryKeys.reconciliation(currentUserID, affectedAgentUserID)
+    )
+  }
+
+  if (currentUserID !== affectedAgentUserID) {
+    return plan
+  }
+
+  plan.push(agentUserQueryKey(agentQueryKeys.overview, currentUserID))
+  if (kind === 'lifecycle') {
+    plan.push(agentAccessQueryKey(currentUserID))
+  }
+  if (kind === 'credit') {
+    plan.push(agentUserQueryKey(agentQueryKeys.creditLogs, currentUserID))
+  }
+  if (kind === 'refund') {
+    plan.push(
+      agentUserQueryKey(agentQueryKeys.orders, currentUserID),
+      agentUserQueryKey(agentQueryKeys.codes, currentUserID),
+      agentUserQueryKey(agentQueryKeys.creditLogs, currentUserID)
+    )
+  }
+  return plan
 }
