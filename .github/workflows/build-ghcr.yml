@@ -8,6 +8,7 @@ name: Build my image (GHCR)
 on:
   push:
     branches: [custom]        # 每次把代码推到 custom 分支，自动构建一次
+    tags: ['custom-v*']       # 推送 custom-v* 版本标签时构建版本化镜像
   workflow_dispatch:          # 也可以在 GitHub 的 Actions 页面手动点按钮触发
 
 jobs:
@@ -29,7 +30,8 @@ jobs:
           # 自动转小写 → ghcr.io/amoresdk/new-api
           images: ghcr.io/${{ github.repository }}
           tags: |
-            type=raw,value=latest
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/custom' }}
+            type=ref,event=tag
             type=sha,format=short
 
       - name: 配置 Buildx
