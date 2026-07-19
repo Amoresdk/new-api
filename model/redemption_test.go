@@ -180,7 +180,7 @@ func TestRedeemConcurrentSingleSuccess(t *testing.T) {
 	assert.Equal(t, 300, user.Quota, "quota must be credited exactly once")
 }
 
-func TestQuotaRedemptionPathsExcludeSubscriptionCodes(t *testing.T) {
+func TestQuotaRedemptionAdminPathsExcludePackageCodes(t *testing.T) {
 	require.NoError(t, DB.AutoMigrate(&Redemption{}))
 	require.NoError(t, DB.Session(&gorm.Session{AllowGlobalUpdate: true}).Unscoped().Delete(&Redemption{}).Error)
 	t.Cleanup(func() {
