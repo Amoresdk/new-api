@@ -120,6 +120,7 @@ func TestGetUsageRankingIncludesModelAndChannelBreakdowns(t *testing.T) {
 		Log{UserId: 10, Username: "alice", CreatedAt: 120, Type: LogTypeConsume, Quota: 60, PromptTokens: 8, CompletionTokens: 2, ModelName: "model-a", Group: "vip", ChannelId: 1},
 		Log{UserId: 10, Username: "alice", CreatedAt: 130, Type: LogTypeConsume, Quota: 20, PromptTokens: 4, CompletionTokens: 1, ModelName: "model-a", Group: "vip", ChannelId: 2},
 		Log{UserId: 10, Username: "alice", CreatedAt: 140, Type: LogTypeConsume, Quota: 20, PromptTokens: 10, CompletionTokens: 5, ModelName: "model-b", Group: "vip", ChannelId: 2},
+		Log{UserId: 10, Username: "alice", CreatedAt: 150, Type: LogTypeConsume, ModelName: "model-b", Group: "vip", ChannelId: 3},
 	)
 
 	result, err := GetUsageRanking(UsageRankingQuery{StartTimestamp: 100, EndTimestamp: 200})
@@ -133,11 +134,13 @@ func TestGetUsageRankingIncludesModelAndChannelBreakdowns(t *testing.T) {
 	assert.Equal(t, int64(80), group.ModelStats[0].Quota)
 	assert.Equal(t, int64(2), group.ModelStats[0].RequestCount)
 	assert.Equal(t, int64(15), group.ModelStats[0].TotalTokens)
+	assert.Equal(t, int64(12), group.ModelStats[0].PromptTokens)
+	assert.Equal(t, int64(3), group.ModelStats[0].CompletionTokens)
 	assert.InDelta(t, 0.8, group.ModelStats[0].QuotaRatio, 0.0001)
 	assert.Equal(t, "model-b", group.ModelStats[1].ModelName)
 	assert.InDelta(t, 0.2, group.ModelStats[1].QuotaRatio, 0.0001)
 
-	require.Len(t, group.ChannelStats, 2)
+	require.Len(t, group.ChannelStats, 3)
 	assert.Equal(t, 1, group.ChannelStats[0].ChannelID)
 	assert.Equal(t, "east", group.ChannelStats[0].ChannelName)
 	assert.Equal(t, int64(60), group.ChannelStats[0].Quota)
@@ -147,7 +150,12 @@ func TestGetUsageRankingIncludesModelAndChannelBreakdowns(t *testing.T) {
 	assert.Equal(t, int64(40), group.ChannelStats[1].Quota)
 	assert.Equal(t, int64(2), group.ChannelStats[1].RequestCount)
 	assert.Equal(t, int64(20), group.ChannelStats[1].TotalTokens)
+	assert.Equal(t, int64(14), group.ChannelStats[1].PromptTokens)
+	assert.Equal(t, int64(6), group.ChannelStats[1].CompletionTokens)
 	assert.InDelta(t, 0.4, group.ChannelStats[1].QuotaRatio, 0.0001)
+	assert.Equal(t, 3, group.ChannelStats[2].ChannelID)
+	assert.Empty(t, group.ChannelStats[2].ChannelName)
+	assert.Zero(t, group.ChannelStats[2].QuotaRatio)
 }
 
 func TestGetUsageRankingSortsByRequestsAndAssignsGlobalRank(t *testing.T) {

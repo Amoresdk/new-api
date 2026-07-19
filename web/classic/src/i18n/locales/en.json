@@ -2211,6 +2211,7 @@
     "模型正则（每行一个）": "Model Regex (one per line)",
     "模型正则不能为空": "Model regex cannot be empty",
     "模型消耗分布": "Model consumption distribution",
+    "渠道消耗分布": "Channel consumption distribution",
     "模型消耗趋势": "Model consumption trend",
     "模型版本": "Model version",
     "模型的详细描述和基本特性": "Detailed description and basic characteristics of the model",

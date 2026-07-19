@@ -2153,6 +2153,7 @@
     "模型正则（每行一个）": "Regex de modèle (un par ligne)",
     "模型正则不能为空": "La regex de modèle ne peut pas être vide",
     "模型消耗分布": "Distribution de la consommation des modèles",
+    "渠道消耗分布": "Distribution de la consommation des canaux",
     "模型消耗趋势": "Tendance de la consommation des modèles",
     "模型版本": "Version du modèle",
     "模型的详细描述和基本特性": "Description détaillée et caractéristiques de base du modèle",

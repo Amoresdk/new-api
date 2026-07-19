@@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 
 import React, { useMemo } from 'react';
-import { Empty, Space, Tag, Typography } from '@douyinfe/semi-ui';
+import { Empty, Progress, Space, Tag, Typography } from '@douyinfe/semi-ui';
 import {
   IllustrationNoResult,
   IllustrationNoResultDark,
@@ -42,6 +42,75 @@ const renderRank = (rank) => {
   if (rank <= 10) return <Tag color='blue'>Top {rank}</Tag>;
   return <Tag>#{rank}</Tag>;
 };
+
+const UsageDistributionPanel = ({ title, items, getName, getSecondary, t }) => (
+  <section className='usage-ranking-distribution-panel'>
+    <h4 className='usage-ranking-distribution-title'>
+      <Text strong>{title}</Text>
+    </h4>
+    {items.length > 0 ? (
+      <div className='usage-ranking-distribution-list'>
+        {items.map((item) => {
+          const percent = Math.max(
+            0,
+            Math.min(100, (Number(item.quota_ratio) || 0) * 100),
+          );
+          const name = getName(item);
+          const secondary = getSecondary?.(item);
+
+          return (
+            <div
+              key={item._distribution_key}
+              className='usage-ranking-distribution-row'
+            >
+              <div className='usage-ranking-distribution-heading'>
+                <div className='usage-ranking-distribution-identity'>
+                  <Text strong ellipsis={{ showTooltip: true }}>
+                    {name}
+                  </Text>
+                  {secondary && (
+                    <Text type='tertiary' size='small'>
+                      {secondary}
+                    </Text>
+                  )}
+                </div>
+                <Space spacing={6}>
+                  <Text strong>{renderQuota(item.quota)}</Text>
+                  <Text type='tertiary' size='small'>
+                    {percent.toFixed(1)}%
+                  </Text>
+                </Space>
+              </div>
+              <Progress
+                percent={percent}
+                showInfo={false}
+                aria-label={`${name}${secondary ? ` ${secondary}` : ''} ${percent.toFixed(1)}%`}
+              />
+              <div className='usage-ranking-distribution-meta'>
+                <Text type='secondary' size='small'>
+                  {t('调用次数')}: {renderNumber(item.request_count)}
+                </Text>
+                <Text type='secondary' size='small'>
+                  {t('Tokens')}: {renderNumber(item.total_tokens)}
+                </Text>
+                <Text type='secondary' size='small'>
+                  {t('输入')}: {renderNumber(item.prompt_tokens)}
+                </Text>
+                <Text type='secondary' size='small'>
+                  {t('输出')}: {renderNumber(item.completion_tokens)}
+                </Text>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    ) : (
+      <Text type='tertiary' size='small'>
+        {t('暂无数据')}
+      </Text>
+    )}
+  </section>
+);
 
 const UsageRankingTable = ({
   items,
@@ -281,22 +350,62 @@ const UsageRankingTable = ({
       onExpandedRowsChange={(expandedRows = []) =>
         setExpandedRowKeys(expandedRows.map((row) => row._ranking_key))
       }
-      expandedRowRender={(record) => (
-        <div className='usage-ranking-group-stats'>
-          <CardTable
-            columns={groupColumns}
-            dataSource={(record.group_stats || []).map((group) => ({
-              ...group,
-              _group_key: `${record._ranking_key}:${group.group}`,
-            }))}
-            rowKey='_group_key'
-            hidePagination
-            pagination={false}
-            size='small'
-            scroll={{ x: 'max-content' }}
-          />
-        </div>
-      )}
+      expandedRowRender={(record) => {
+        const groupStats = (record.group_stats || []).map((group) => ({
+          ...group,
+          _group_key: `${record._ranking_key}:${group.group}`,
+        }));
+
+        return (
+          <div className='usage-ranking-group-stats'>
+            <CardTable
+              columns={groupColumns}
+              dataSource={groupStats}
+              rowKey='_group_key'
+              hidePagination
+              pagination={false}
+              size='small'
+              scroll={{ x: 'max-content' }}
+            />
+            <div className='usage-ranking-distribution-groups'>
+              {groupStats.map((group) => (
+                <section
+                  key={group._group_key}
+                  className='usage-ranking-distribution-group'
+                >
+                  <div className='usage-ranking-distribution-group-title'>
+                    <Text type='secondary' size='small'>
+                      {t('分组')}
+                    </Text>
+                    <Text strong>{group.group || t('未命名分组')}</Text>
+                  </div>
+                  <div className='usage-ranking-distribution-grid'>
+                    <UsageDistributionPanel
+                      title={t('模型消耗分布')}
+                      items={(group.model_stats || []).map((item, index) => ({
+                        ...item,
+                        _distribution_key: `${group._group_key}:model:${item.model_name || index}`,
+                      }))}
+                      getName={(item) => item.model_name || '-'}
+                      t={t}
+                    />
+                    <UsageDistributionPanel
+                      title={t('渠道消耗分布')}
+                      items={(group.channel_stats || []).map((item) => ({
+                        ...item,
+                        _distribution_key: `${group._group_key}:channel:${item.channel_id}`,
+                      }))}
+                      getName={(item) => item.channel_name || t('未知渠道')}
+                      getSecondary={(item) => `#${item.channel_id}`}
+                      t={t}
+                    />
+                  </div>
+                </section>
+              ))}
+            </div>
+          </div>
+        );
+      }}
       rowExpandable={(record) => record.group_stats?.length > 0}
       empty={
         <Empty

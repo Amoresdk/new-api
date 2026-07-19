@@ -2137,6 +2137,7 @@
     "模型正则（每行一个）": "Regex model (mỗi dòng một mục)",
     "模型正则不能为空": "Regex model không được để trống",
     "模型消耗分布": "Phân phối tiêu thụ mô hình",
+    "渠道消耗分布": "Phân phối tiêu thụ theo kênh",
     "模型消耗趋势": "Xu hướng tiêu thụ mô hình",
     "模型版本": "Phiên bản mô hình",
     "模型状态": "Trạng thái mô hình",

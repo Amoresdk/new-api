@@ -25,6 +25,84 @@
   min-width: 720px;
 }
 
+.usage-ranking-root .usage-ranking-distribution-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.usage-ranking-root .usage-ranking-distribution-group {
+  padding: 12px;
+  border: 1px solid var(--semi-color-border);
+  border-radius: 10px;
+  background: var(--semi-color-bg-1);
+}
+
+.usage-ranking-root .usage-ranking-distribution-group-title {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.usage-ranking-root .usage-ranking-distribution-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.usage-ranking-root .usage-ranking-distribution-panel {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--semi-color-border);
+  border-radius: 8px;
+  background: var(--semi-color-fill-0);
+}
+
+.usage-ranking-root .usage-ranking-distribution-title {
+  margin: 0;
+  font-size: inherit;
+}
+
+.usage-ranking-root .usage-ranking-distribution-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.usage-ranking-root .usage-ranking-distribution-row {
+  min-width: 0;
+}
+
+.usage-ranking-root .usage-ranking-distribution-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+  margin-bottom: 4px;
+}
+
+.usage-ranking-root .usage-ranking-distribution-identity {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.usage-ranking-root .usage-ranking-distribution-identity > .semi-typography {
+  min-width: 0;
+}
+
+.usage-ranking-root .usage-ranking-distribution-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 12px;
+  margin-top: 4px;
+}
+
 @media (max-width: 767px) {
   .usage-ranking-root .usage-ranking-group-stats {
     padding: 4px;
@@ -32,5 +110,13 @@
 
   .usage-ranking-root .usage-ranking-group-stats .semi-card {
     box-shadow: none;
+  }
+
+  .usage-ranking-root .usage-ranking-distribution-group {
+    padding: 8px;
+  }
+
+  .usage-ranking-root .usage-ranking-distribution-grid {
+    grid-template-columns: minmax(0, 1fr);
   }
 }

@@ -345,6 +345,25 @@ export interface UsageRankingParams {
   page_size?: number
 }
 
+interface UsageRankingDistributionStat {
+  quota: number
+  quota_ratio: number
+  request_count: number
+  prompt_tokens: number
+  completion_tokens: number
+  total_tokens: number
+  last_used_at: number
+}
+
+export interface UsageRankingModelStat extends UsageRankingDistributionStat {
+  model_name: string
+}
+
+export interface UsageRankingChannelStat extends UsageRankingDistributionStat {
+  channel_id: number
+  channel_name: string
+}
+
 export interface UsageRankingGroupStat {
   group: string
   quota: number
@@ -361,6 +380,8 @@ export interface UsageRankingGroupStat {
   token_count: number
   channel_count: number
   last_used_at: number
+  model_stats: UsageRankingModelStat[]
+  channel_stats: UsageRankingChannelStat[]
 }
 
 export interface UsageRankingItem {

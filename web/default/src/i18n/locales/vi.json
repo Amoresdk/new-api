@@ -5123,6 +5123,9 @@
     "Zero retention": "Không lưu dữ liệu",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Model Consumption Distribution": "Phân phối tiêu thụ mô hình",
+    "Channel Consumption Distribution": "Phân phối tiêu thụ theo kênh",
+    "Unknown Channel": "Kênh không xác định"
   }
 }

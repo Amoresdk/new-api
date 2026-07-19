@@ -5123,6 +5123,9 @@
     "Zero retention": "データ保持なし",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V 4",
-    "Zoom": "ズーム"
+    "Zoom": "ズーム",
+    "Model Consumption Distribution": "モデル消費分布",
+    "Channel Consumption Distribution": "チャネル消費分布",
+    "Unknown Channel": "不明なチャネル"
   }
 }
