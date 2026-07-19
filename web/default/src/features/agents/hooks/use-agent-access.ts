@@ -32,6 +32,12 @@ function isAgentAccessDenied(error: unknown): boolean {
   return axios.isAxiosError(error) && error.response?.status === 403
 }
 
+const agentBusinessDenials = new Set([
+  'agent workspace is disabled',
+  'agent account not found',
+  'agent account is disabled',
+])
+
 type AgentAccessProbe = () => Promise<ApiResult<AgentOverview>>
 
 export async function resolveAgentAccess(
@@ -39,7 +45,11 @@ export async function resolveAgentAccess(
 ): Promise<AgentOverview | null> {
   try {
     const response = await probe()
-    return response.success ? response.data : null
+    if (response.success) return response.data
+    if (agentBusinessDenials.has(response.message.trim().toLowerCase())) {
+      return null
+    }
+    throw new Error('Agent access probe failed')
   } catch (error) {
     if (isAgentAccessDenied(error)) return null
     throw error
@@ -48,8 +58,14 @@ export async function resolveAgentAccess(
 
 export function useAgentAccess() {
   const userID = useAuthStore((state) => state.auth.user?.id)
-  const { status } = useStatus()
-  const globallyEnabled = status?.agent_enabled === true
+  const statusQuery = useStatus()
+  const statusIsAuthoritative =
+    !statusQuery.loading &&
+    !statusQuery.isFetching &&
+    !statusQuery.isPlaceholderData &&
+    !statusQuery.isError
+  const globallyEnabled =
+    statusIsAuthoritative && statusQuery.status?.agent_enabled === true
   const shouldCheck = userID !== undefined && globallyEnabled
 
   const query = useQuery({

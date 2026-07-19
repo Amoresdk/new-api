@@ -103,6 +103,52 @@ const csvResponseSchema = z
     contentType: z.string().refine((value) => value.startsWith('text/csv')),
   })
   .strict()
+const fallbackAgentExportFilename = 'agent-codes.csv'
+
+function safeAgentExportFilename(value: string): string | null {
+  const filename = value.trim()
+  const hasControlCharacter = [...filename].some((character) => {
+    const codePoint = character.codePointAt(0) ?? 0
+    return codePoint < 32 || codePoint === 127
+  })
+  if (
+    filename.length === 0 ||
+    filename.length > 180 ||
+    filename.startsWith('.') ||
+    !filename.toLowerCase().endsWith('.csv') ||
+    filename.includes('/') ||
+    filename.includes('\\') ||
+    hasControlCharacter
+  ) {
+    return null
+  }
+  return filename
+}
+
+export function parseAgentExportFilename(contentDisposition: unknown): string {
+  if (typeof contentDisposition !== 'string') {
+    return fallbackAgentExportFilename
+  }
+
+  const encoded = /(?:^|;)\s*filename\*\s*=\s*UTF-8''([^;]+)/i.exec(
+    contentDisposition
+  )
+  if (encoded) {
+    try {
+      const decoded = decodeURIComponent(encoded[1].trim())
+      const safe = safeAgentExportFilename(decoded)
+      if (safe) return safe
+    } catch {
+      return fallbackAgentExportFilename
+    }
+  }
+
+  const basic = /(?:^|;)\s*filename\s*=\s*(?:"([^"]*)"|([^;]+))/i.exec(
+    contentDisposition
+  )
+  const safe = safeAgentExportFilename((basic?.[1] ?? basic?.[2] ?? '').trim())
+  return safe ?? fallbackAgentExportFilename
+}
 
 const pageFilterFields = {
   p: z.number().int().positive().optional(),
@@ -229,7 +275,7 @@ export async function getAgentCodes(
 
 export async function exportAgentCodes(
   params: Omit<AgentCodeParams, 'agent_user_id' | 'p' | 'page_size'> = {}
-): Promise<Blob> {
+): Promise<{ blob: Blob; filename: string }> {
   const response = await api.get('/api/agent/codes/export', {
     params: selfExportCodeParams(params),
     responseType: 'blob',
@@ -238,7 +284,10 @@ export async function exportAgentCodes(
     blob: response.data,
     contentType: response.headers['content-type'],
   })
-  return result.blob
+  return {
+    blob: result.blob,
+    filename: parseAgentExportFilename(response.headers['content-disposition']),
+  }
 }
 
 export async function getAgentCreditLogs(

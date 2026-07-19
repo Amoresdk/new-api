@@ -45,12 +45,18 @@ const emptyPage = {
 function response(
   config: InternalAxiosRequestConfig,
   data: unknown,
-  contentType = 'application/json'
+  contentType = 'application/json',
+  extraHeaders: Record<string, string | undefined> = {}
 ): AxiosResponse {
   return {
     config,
     data,
-    headers: { 'content-type': contentType },
+    headers: {
+      'content-type': contentType,
+      ...Object.fromEntries(
+        Object.entries(extraHeaders).filter(([, value]) => value !== undefined)
+      ),
+    },
     status: 200,
     statusText: 'OK',
   }
@@ -137,6 +143,33 @@ describe('agent API request isolation', () => {
       assert.equal(captured?.skipBusinessError, true)
       assert.equal(captured?.skipErrorHandler, true)
       assert.equal(captured?.disableDuplicate, true)
+    } finally {
+      api.defaults.adapter = originalAdapter
+    }
+  })
+
+  test('uses a safe server export filename and rejects path traversal', async () => {
+    const originalAdapter = api.defaults.adapter
+    const contentDispositions = [
+      "attachment; filename*=UTF-8''agent-codes-%E4%B8%AD%E6%96%87.csv",
+      'attachment; filename="agent-codes-july.csv"',
+      'attachment; filename="../private.csv"',
+      'attachment; filename="agent-codes\u0007.csv"',
+    ]
+    api.defaults.adapter = async (config) =>
+      response(config, new Blob(['code\n']), 'text/csv; charset=utf-8', {
+        'content-disposition': contentDispositions.shift(),
+      })
+
+    try {
+      const safe = await exportAgentCodes()
+      assert.equal(safe.filename, 'agent-codes-中文.csv')
+      const basic = await exportAgentCodes()
+      assert.equal(basic.filename, 'agent-codes-july.csv')
+      const rejected = await exportAgentCodes()
+      assert.equal(rejected.filename, 'agent-codes.csv')
+      const controlCharacter = await exportAgentCodes()
+      assert.equal(controlCharacter.filename, 'agent-codes.csv')
     } finally {
       api.defaults.adapter = originalAdapter
     }

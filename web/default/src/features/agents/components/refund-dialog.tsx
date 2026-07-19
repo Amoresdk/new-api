@@ -39,6 +39,8 @@ import { formatAgentPoints } from '../lib/money'
 import {
   AgentIdempotencyKeyStore,
   agentMutationInvalidationKeys,
+  canChangeAgentDialogOpen,
+  resetAgentDialogLifecycle,
 } from '../lib/workspace'
 import type { AgentRefundResponse } from '../types'
 
@@ -81,15 +83,22 @@ export function RefundDialog(props: RefundDialogProps) {
     onError: () => toast.error(t('Failed to refund package codes')),
   })
 
+  const handleOpenChange = (open: boolean) => {
+    if (!canChangeAgentDialogOpen(open, mutation.isPending)) return
+    if (!open) {
+      setResult(null)
+      mutation.reset()
+      resetAgentDialogLifecycle(keyStore.current)
+    }
+    props.onOpenChange(open)
+  }
+
   return (
-    <Dialog
-      open={props.open}
-      onOpenChange={(open) => {
-        props.onOpenChange(open)
-        if (!open && result) setResult(null)
-      }}
-    >
-      <DialogContent className='sm:max-w-md'>
+    <Dialog open={props.open} onOpenChange={handleOpenChange}>
+      <DialogContent
+        className='sm:max-w-md'
+        showCloseButton={!mutation.isPending}
+      >
         <DialogHeader>
           <DialogTitle>{t('Refund package codes')}</DialogTitle>
           <DialogDescription>
@@ -142,7 +151,8 @@ export function RefundDialog(props: RefundDialogProps) {
           <Button
             type='button'
             variant='outline'
-            onClick={() => props.onOpenChange(false)}
+            disabled={mutation.isPending}
+            onClick={() => handleOpenChange(false)}
           >
             {result ? t('Done') : t('Cancel')}
           </Button>

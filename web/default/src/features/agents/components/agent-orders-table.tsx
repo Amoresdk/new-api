@@ -30,11 +30,13 @@ import { Input } from '@/components/ui/input'
 import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select'
 import { useAuthStore } from '@/stores/auth-store'
 
-import { getAgentOffers, getAgentOrders } from '../api'
+import { getAgentOrders } from '../api'
 import { formatAgentPoints } from '../lib/money'
 import {
   agentQueryKeys,
+  agentUserQueryKey,
   localDateInputToTimestamp,
+  retainSameAgentPage,
   timestampToLocalDateInput,
   type AgentWorkspaceSearch,
 } from '../lib/workspace'
@@ -51,24 +53,17 @@ export function AgentOrdersTable(props: AgentOrdersTableProps) {
   const userID = useAuthStore((state) => state.auth.user?.id ?? 0)
   const page = props.search.p ?? 1
   const pageSize = props.search.page_size ?? 20
-  const offersQuery = useQuery({
-    queryKey: agentQueryKeys.offers,
-    queryFn: async () => {
-      const response = await getAgentOffers()
-      return response.success ? response.data : []
-    },
-  })
   const ordersQuery = useQuery({
-    queryKey: [
-      ...agentQueryKeys.orders,
+    queryKey: agentUserQueryKey(
+      agentQueryKeys.orders,
       userID,
       page,
       pageSize,
       props.search.plan_id,
       props.search.order_status,
       props.search.start_timestamp,
-      props.search.end_timestamp,
-    ],
+      props.search.end_timestamp
+    ),
     queryFn: async () => {
       const response = await getAgentOrders({
         p: page,
@@ -81,7 +76,14 @@ export function AgentOrdersTable(props: AgentOrdersTableProps) {
       if (!response.success) throw new Error('Agent orders unavailable')
       return response.data
     },
-    placeholderData: (previous) => previous,
+    placeholderData: (previous, previousQuery) =>
+      retainSameAgentPage(
+        userID,
+        typeof previousQuery?.queryKey[2] === 'number'
+          ? previousQuery.queryKey[2]
+          : undefined,
+        previous
+      ),
   })
 
   const columns = useMemo<ColumnDef<AgentOrder>[]>(
@@ -137,6 +139,7 @@ export function AgentOrdersTable(props: AgentOrdersTableProps) {
     getCoreRowModel: getCoreRowModel(),
     manualPagination: true,
     rowCount: ordersQuery.data?.total ?? 0,
+    getRowId: (row) => row.id.toString(),
   })
 
   const updateFilters = (updates: Partial<AgentWorkspaceSearch>) =>
@@ -147,6 +150,8 @@ export function AgentOrdersTable(props: AgentOrdersTableProps) {
       table={table}
       isLoading={ordersQuery.isPending}
       isFetching={ordersQuery.isFetching}
+      error={ordersQuery.error}
+      onRetry={() => ordersQuery.refetch()}
       emptyTitle={t('No agent orders found')}
       emptyDescription={t('Purchased package-code orders will appear here.')}
       page={page}
@@ -155,8 +160,12 @@ export function AgentOrdersTable(props: AgentOrdersTableProps) {
       onPageChange={(nextPage) => props.onSearchChange({ p: nextPage })}
       filters={
         <>
-          <NativeSelect
+          <Input
+            type='number'
+            min={1}
+            className='w-32'
             aria-label={t('Filter orders by plan')}
+            placeholder={t('Plan ID')}
             value={props.search.plan_id?.toString() ?? ''}
             onChange={(event) =>
               updateFilters({
@@ -165,14 +174,7 @@ export function AgentOrdersTable(props: AgentOrdersTableProps) {
                   : undefined,
               })
             }
-          >
-            <NativeSelectOption value=''>{t('All plans')}</NativeSelectOption>
-            {offersQuery.data?.map((offer) => (
-              <NativeSelectOption key={offer.plan_id} value={offer.plan_id}>
-                {offer.plan.title}
-              </NativeSelectOption>
-            ))}
-          </NativeSelect>
+          />
           <NativeSelect
             aria-label={t('Filter orders by status')}
             value={props.search.order_status ?? ''}

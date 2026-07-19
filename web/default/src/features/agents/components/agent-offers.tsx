@@ -18,6 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import {
   Package01Icon,
+  RefreshIcon,
   ShoppingCartAdd01Icon,
 } from '@hugeicons/core-free-icons'
 import { HugeiconsIcon } from '@hugeicons/react'
@@ -36,33 +37,45 @@ import {
 } from '@/components/ui/card'
 import {
   Empty,
+  EmptyContent,
   EmptyDescription,
   EmptyHeader,
   EmptyMedia,
   EmptyTitle,
 } from '@/components/ui/empty'
 import { Skeleton } from '@/components/ui/skeleton'
+import { useAuthStore } from '@/stores/auth-store'
 
 import { getAgentOffers } from '../api'
 import { formatAgentPoints } from '../lib/money'
-import { agentQueryKeys } from '../lib/workspace'
+import {
+  agentQueryKeys,
+  agentUserQueryKey,
+  getAgentQueryView,
+} from '../lib/workspace'
 import type { AgentOffer } from '../types'
 import { PurchaseDialog } from './purchase-dialog'
 
 export function AgentOffers() {
   const { t } = useTranslation()
+  const userID = useAuthStore((state) => state.auth.user?.id ?? 0)
   const [selectedOffer, setSelectedOffer] = useState<AgentOffer | null>(null)
   const query = useQuery({
-    queryKey: agentQueryKeys.offers,
+    queryKey: agentUserQueryKey(agentQueryKeys.offers, userID),
     queryFn: async () => {
       const response = await getAgentOffers()
       if (!response.success) throw new Error('Agent offers unavailable')
       return response.data
     },
   })
+  const view = getAgentQueryView({
+    loading: query.isPending,
+    error: Boolean(query.error),
+    hasData: Boolean(query.data?.length),
+  })
   let offersContent: ReactNode
 
-  if (query.isPending) {
+  if (view === 'loading') {
     offersContent = (
       <div className='grid gap-3 md:grid-cols-2 xl:grid-cols-3'>
         {Array.from({ length: 3 }, (_, index) => (
@@ -81,7 +94,32 @@ export function AgentOffers() {
         ))}
       </div>
     )
-  } else if (query.data?.length) {
+  } else if (view === 'error') {
+    offersContent = (
+      <Empty className='min-h-52 border'>
+        <EmptyHeader>
+          <EmptyTitle>{t('Failed to load package offers')}</EmptyTitle>
+          <EmptyDescription>
+            {t('Try loading the package offers again.')}
+          </EmptyDescription>
+        </EmptyHeader>
+        <EmptyContent>
+          <Button
+            type='button'
+            variant='outline'
+            onClick={() => query.refetch()}
+          >
+            <HugeiconsIcon
+              icon={RefreshIcon}
+              strokeWidth={2}
+              data-icon='inline-start'
+            />
+            {t('Retry')}
+          </Button>
+        </EmptyContent>
+      </Empty>
+    )
+  } else if (view === 'data' && query.data) {
     offersContent = (
       <div className='grid gap-3 md:grid-cols-2 xl:grid-cols-3'>
         {query.data.map((offer) => (
@@ -92,7 +130,7 @@ export function AgentOffers() {
                 {offer.plan.subtitle || t('Subscription package code')}
               </CardDescription>
             </CardHeader>
-            <CardContent className='space-y-2'>
+            <CardContent className='flex flex-col gap-2'>
               <div>
                 <span className='text-2xl font-semibold tabular-nums'>
                   {formatAgentPoints(offer.unit_price)}
@@ -144,7 +182,10 @@ export function AgentOffers() {
   }
 
   return (
-    <section className='space-y-3' aria-labelledby='agent-offers-heading'>
+    <section
+      className='flex flex-col gap-3'
+      aria-labelledby='agent-offers-heading'
+    >
       <div>
         <h3 id='agent-offers-heading' className='text-base font-semibold'>
           {t('Package offers')}

@@ -34,7 +34,9 @@ import { getAgentCreditLogs } from '../api'
 import { formatAgentPoints } from '../lib/money'
 import {
   agentQueryKeys,
+  agentUserQueryKey,
   localDateInputToTimestamp,
+  retainSameAgentPage,
   timestampToLocalDateInput,
   type AgentWorkspaceSearch,
 } from '../lib/workspace'
@@ -52,15 +54,15 @@ export function AgentCreditLogsTable(props: AgentCreditLogsTableProps) {
   const page = props.search.p ?? 1
   const pageSize = props.search.page_size ?? 20
   const query = useQuery({
-    queryKey: [
-      ...agentQueryKeys.creditLogs,
+    queryKey: agentUserQueryKey(
+      agentQueryKeys.creditLogs,
       userID,
       page,
       pageSize,
       props.search.event_type,
       props.search.start_timestamp,
-      props.search.end_timestamp,
-    ],
+      props.search.end_timestamp
+    ),
     queryFn: async () => {
       const response = await getAgentCreditLogs({
         p: page,
@@ -72,7 +74,14 @@ export function AgentCreditLogsTable(props: AgentCreditLogsTableProps) {
       if (!response.success) throw new Error('Agent credit logs unavailable')
       return response.data
     },
-    placeholderData: (previous) => previous,
+    placeholderData: (previous, previousQuery) =>
+      retainSameAgentPage(
+        userID,
+        typeof previousQuery?.queryKey[2] === 'number'
+          ? previousQuery.queryKey[2]
+          : undefined,
+        previous
+      ),
   })
 
   const columns = useMemo<ColumnDef<AgentCreditLog>[]>(
@@ -128,6 +137,7 @@ export function AgentCreditLogsTable(props: AgentCreditLogsTableProps) {
     getCoreRowModel: getCoreRowModel(),
     manualPagination: true,
     rowCount: query.data?.total ?? 0,
+    getRowId: (row) => row.id.toString(),
   })
 
   const updateFilters = (updates: Partial<AgentWorkspaceSearch>) =>
@@ -138,6 +148,8 @@ export function AgentCreditLogsTable(props: AgentCreditLogsTableProps) {
       table={table}
       isLoading={query.isPending}
       isFetching={query.isFetching}
+      error={query.error}
+      onRetry={() => query.refetch()}
       emptyTitle={t('No point ledger entries found')}
       emptyDescription={t(
         'Point adjustments, purchases, and refunds will appear here.'

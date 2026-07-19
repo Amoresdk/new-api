@@ -31,7 +31,11 @@ import {
 import { Spinner } from '@/components/ui/spinner'
 import { AgentWorkspace } from '@/features/agents'
 import { useAgentAccess } from '@/features/agents/hooks/use-agent-access'
-import { agentWorkspaceSearchSchema } from '@/features/agents/lib/workspace'
+import {
+  agentWorkspaceSearchSchema,
+  getAgentRouteGateState,
+  retryAgentRouteGate,
+} from '@/features/agents/lib/workspace'
 import { useStatus } from '@/hooks/use-status'
 import { useAuthStore } from '@/stores/auth-store'
 
@@ -56,16 +60,25 @@ function AgentRouteGate() {
   const routeNavigate = Route.useNavigate()
   const access = useAgentAccess()
   const status = useStatus()
-  const denied =
-    !status.loading &&
-    !status.error &&
-    (!access.globallyEnabled || access.data === null)
+  const userID = useAuthStore((state) => state.auth.user?.id ?? 0)
+  const gateState = getAgentRouteGateState({
+    statusEnabled: status.status?.agent_enabled === true,
+    statusPlaceholder: status.isPlaceholderData,
+    statusPending: status.loading || status.isFetching,
+    statusError: status.isError,
+    accessPending: access.isChecking,
+    accessDenied: access.data === null,
+    accessError: access.isError,
+    accessReady: access.data !== null && access.data !== undefined,
+  })
 
   useEffect(() => {
-    if (denied) void navigate({ to: '/403', replace: true })
-  }, [denied, navigate])
+    if (gateState === 'denied') {
+      void navigate({ to: '/403', replace: true })
+    }
+  }, [gateState, navigate])
 
-  if (status.loading || access.isChecking || denied) {
+  if (gateState === 'loading' || gateState === 'denied') {
     return (
       <div className='flex min-h-64 items-center justify-center'>
         <Spinner className='size-6' aria-label={t('Loading agent workspace')} />
@@ -73,7 +86,7 @@ function AgentRouteGate() {
     )
   }
 
-  if (status.error || access.isError || !access.data) {
+  if (gateState === 'error' || !access.data) {
     return (
       <div className='flex min-h-64 items-center justify-center p-4'>
         <Empty className='max-w-md border'>
@@ -89,7 +102,9 @@ function AgentRouteGate() {
             <Button
               type='button'
               variant='outline'
-              onClick={() => access.refetch()}
+              onClick={() =>
+                retryAgentRouteGate(status.refetch, access.refetch)
+              }
             >
               {t('Retry')}
             </Button>
@@ -101,6 +116,7 @@ function AgentRouteGate() {
 
   return (
     <AgentWorkspace
+      key={userID}
       initialOverview={access.data}
       search={search}
       onSearchChange={(updates) =>

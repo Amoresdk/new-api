@@ -50,6 +50,8 @@ import { formatAgentPoints } from '../lib/money'
 import {
   AgentIdempotencyKeyStore,
   agentMutationInvalidationKeys,
+  canChangeAgentDialogOpen,
+  resetAgentDialogLifecycle,
 } from '../lib/workspace'
 import type { AgentOffer, AgentPurchaseResponse } from '../types'
 
@@ -115,17 +117,22 @@ export function PurchaseDialog(props: PurchaseDialogProps) {
   }
 
   const handleOpenChange = (open: boolean) => {
+    if (!canChangeAgentDialogOpen(open, mutation.isPending)) return
     if (!open) {
       setResult(null)
       mutation.reset()
       form.reset({ quantity: 1 })
+      resetAgentDialogLifecycle(keyStore.current)
     }
     props.onOpenChange(open)
   }
 
   return (
     <Dialog open={props.open} onOpenChange={handleOpenChange}>
-      <DialogContent className='max-h-[min(90vh,720px)] overflow-y-auto sm:max-w-lg'>
+      <DialogContent
+        className='max-h-[min(90vh,720px)] overflow-y-auto sm:max-w-lg'
+        showCloseButton={!mutation.isPending}
+      >
         <DialogHeader>
           <DialogTitle>{t('Purchase package codes')}</DialogTitle>
           <DialogDescription>
@@ -169,7 +176,7 @@ export function PurchaseDialog(props: PurchaseDialogProps) {
 
           {result && (
             <div
-              className='mt-4 space-y-3 rounded-xl border p-3'
+              className='mt-4 flex flex-col gap-3 rounded-xl border p-3'
               aria-live='polite'
             >
               <div className='grid gap-2 text-sm sm:grid-cols-2'>
@@ -190,9 +197,9 @@ export function PurchaseDialog(props: PurchaseDialogProps) {
                   </div>
                 </div>
               </div>
-              <div className='space-y-1.5'>
+              <div className='flex flex-col gap-1.5'>
                 <div className='font-medium'>{t('Purchased codes')}</div>
-                <div className='max-h-48 space-y-1 overflow-y-auto'>
+                <div className='flex max-h-48 flex-col gap-1 overflow-y-auto'>
                   {result.codes.map((code) => (
                     <div
                       key={code.id}
@@ -225,6 +232,7 @@ export function PurchaseDialog(props: PurchaseDialogProps) {
             <Button
               type='button'
               variant='outline'
+              disabled={mutation.isPending}
               onClick={() => handleOpenChange(false)}
             >
               {t('Close')}

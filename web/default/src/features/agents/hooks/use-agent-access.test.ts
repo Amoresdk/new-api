@@ -24,12 +24,28 @@ import { AxiosError, type InternalAxiosRequestConfig } from 'axios'
 import { resolveAgentAccess } from './use-agent-access'
 
 describe('agent access resolution', () => {
-  test('maps business denial to no access', async () => {
-    const result = await resolveAgentAccess(async () => ({
-      success: false,
-      message: 'agent account not found',
-    }))
-    assert.equal(result, null)
+  test('maps only explicit business denials to no access', async () => {
+    for (const message of [
+      'agent workspace is disabled',
+      'agent account not found',
+      'agent account is disabled',
+    ]) {
+      const result = await resolveAgentAccess(async () => ({
+        success: false,
+        message,
+      }))
+      assert.equal(result, null)
+    }
+  })
+
+  test('keeps unknown business failures in the error path', async () => {
+    await assert.rejects(
+      resolveAgentAccess(async () => ({
+        success: false,
+        message: 'database temporarily unavailable',
+      })),
+      /Agent access probe failed/
+    )
   })
 
   test('maps HTTP 403 to no access without retrying the probe', async () => {

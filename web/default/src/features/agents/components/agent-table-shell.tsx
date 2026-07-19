@@ -20,6 +20,7 @@ import {
   ArrowLeft01Icon,
   ArrowRight01Icon,
   Database01Icon,
+  RefreshIcon,
 } from '@hugeicons/core-free-icons'
 import { HugeiconsIcon } from '@hugeicons/react'
 import { flexRender, type Table as TanstackTable } from '@tanstack/react-table'
@@ -29,6 +30,7 @@ import { useTranslation } from 'react-i18next'
 import { Button } from '@/components/ui/button'
 import {
   Empty,
+  EmptyContent,
   EmptyDescription,
   EmptyHeader,
   EmptyMedia,
@@ -44,10 +46,14 @@ import {
   TableRow,
 } from '@/components/ui/table'
 
+import { getAgentQueryView } from '../lib/workspace'
+
 type AgentTableShellProps<TData> = {
   table: TanstackTable<TData>
   isLoading: boolean
   isFetching: boolean
+  error: unknown
+  onRetry: () => void
   emptyTitle: string
   emptyDescription: string
   filters?: ReactNode
@@ -62,17 +68,46 @@ export function AgentTableShell<TData>(props: AgentTableShellProps<TData>) {
   const { t } = useTranslation()
   const rows = props.table.getRowModel().rows
   const pageCount = Math.max(1, Math.ceil(props.total / props.pageSize))
+  const view = getAgentQueryView({
+    loading: props.isLoading,
+    error: Boolean(props.error),
+    hasData: rows.length > 0,
+  })
   let tableContent: ReactNode
 
-  if (props.isLoading) {
+  if (view === 'loading') {
     tableContent = (
-      <div className='space-y-3 p-4' aria-label={t('Loading agent data')}>
+      <div
+        className='flex flex-col gap-3 p-4'
+        aria-label={t('Loading agent data')}
+      >
         {Array.from({ length: 6 }, (_, index) => (
           <Skeleton key={index} className='h-8 w-full' />
         ))}
       </div>
     )
-  } else if (rows.length === 0) {
+  } else if (view === 'error') {
+    tableContent = (
+      <Empty className='min-h-56 border-none'>
+        <EmptyHeader>
+          <EmptyTitle>{t('Failed to load agent data')}</EmptyTitle>
+          <EmptyDescription>
+            {t('Try loading this agent table again.')}
+          </EmptyDescription>
+        </EmptyHeader>
+        <EmptyContent>
+          <Button type='button' variant='outline' onClick={props.onRetry}>
+            <HugeiconsIcon
+              icon={RefreshIcon}
+              strokeWidth={2}
+              data-icon='inline-start'
+            />
+            {t('Retry')}
+          </Button>
+        </EmptyContent>
+      </Empty>
+    )
+  } else if (view === 'empty') {
     tableContent = (
       <Empty className='min-h-56 border-none'>
         <EmptyHeader>

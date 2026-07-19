@@ -79,6 +79,78 @@ export const agentWorkspaceSearchSchema = z
 
 export type AgentWorkspaceSearch = z.infer<typeof agentWorkspaceSearchSchema>
 
+type AgentRouteGateInput = {
+  statusEnabled: boolean
+  statusPlaceholder: boolean
+  statusPending: boolean
+  statusError: boolean
+  accessPending: boolean
+  accessDenied: boolean
+  accessError: boolean
+  accessReady: boolean
+}
+
+export type AgentRouteGateState = 'loading' | 'error' | 'denied' | 'ready'
+
+export function getAgentRouteGateState(
+  input: AgentRouteGateInput
+): AgentRouteGateState {
+  if (input.statusError) return 'error'
+  if (input.statusPending || input.statusPlaceholder) return 'loading'
+  if (!input.statusEnabled) return 'denied'
+  if (input.accessError) return 'error'
+  if (input.accessPending) return 'loading'
+  if (input.accessDenied) return 'denied'
+  if (input.accessReady) return 'ready'
+  return 'loading'
+}
+
+export async function retryAgentRouteGate(
+  refetchStatus: () => Promise<unknown>,
+  refetchAccess: () => Promise<unknown>
+): Promise<void> {
+  await Promise.all([refetchStatus(), refetchAccess()])
+}
+
+export type AgentQueryView = 'loading' | 'error' | 'empty' | 'data'
+
+export function getAgentQueryView(input: {
+  loading: boolean
+  error: boolean
+  hasData: boolean
+}): AgentQueryView {
+  if (input.loading) return 'loading'
+  if (input.error && !input.hasData) return 'error'
+  return input.hasData ? 'data' : 'empty'
+}
+
+export function retainSameAgentPage<T>(
+  currentUserID: number,
+  previousUserID: number | undefined,
+  previousData: T | undefined
+): T | undefined {
+  return currentUserID === previousUserID ? previousData : undefined
+}
+
+type AgentExportFile = { blob: Blob; filename: string }
+type AgentExportDownloadEnvironment = {
+  createObjectURL: (blob: Blob) => string
+  revokeObjectURL: (url: string) => void
+  click: (url: string, filename: string) => void
+}
+
+export function downloadAgentExport(
+  file: AgentExportFile,
+  environment: AgentExportDownloadEnvironment
+): void {
+  const url = environment.createObjectURL(file.blob)
+  try {
+    environment.click(url, file.filename)
+  } finally {
+    environment.revokeObjectURL(url)
+  }
+}
+
 export function timestampToLocalDateInput(
   timestamp: number | undefined
 ): string {
@@ -113,6 +185,14 @@ export const agentQueryKeys = {
   orders: ['agent', 'orders'] as const,
   codes: ['agent', 'codes'] as const,
   creditLogs: ['agent', 'credit-logs'] as const,
+}
+
+export function agentUserQueryKey(
+  prefix: readonly string[],
+  userID: number,
+  ...parts: readonly unknown[]
+): readonly unknown[] {
+  return [...prefix, userID, ...parts]
 }
 
 export const agentMutationInvalidationKeys = [
@@ -168,4 +248,17 @@ export class AgentIdempotencyKeyStore {
     this.fingerprint = ''
     this.key = ''
   }
+}
+
+export function canChangeAgentDialogOpen(
+  nextOpen: boolean,
+  pending: boolean
+): boolean {
+  return nextOpen || !pending
+}
+
+export function resetAgentDialogLifecycle(
+  keyStore: AgentIdempotencyKeyStore
+): void {
+  keyStore.complete()
 }

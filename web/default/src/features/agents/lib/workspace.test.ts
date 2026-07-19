@@ -23,9 +23,17 @@ import type { AgentCode } from '../types'
 import {
   AgentIdempotencyKeyStore,
   agentMutationInvalidationKeys,
+  agentUserQueryKey,
   agentWorkspaceSearchSchema,
+  canChangeAgentDialogOpen,
+  downloadAgentExport,
+  getAgentQueryView,
+  getAgentRouteGateState,
   isRefundableAgentCode,
   localDateInputToTimestamp,
+  retainSameAgentPage,
+  resetAgentDialogLifecycle,
+  retryAgentRouteGate,
   timestampToLocalDateInput,
   toggleRefundSelection,
 } from './workspace'
@@ -73,6 +81,85 @@ describe('agent workspace URL state', () => {
   })
 })
 
+describe('agent route gate', () => {
+  test('waits for authoritative status instead of denying from placeholder data', () => {
+    assert.equal(
+      getAgentRouteGateState({
+        statusEnabled: false,
+        statusPlaceholder: true,
+        statusPending: false,
+        statusError: false,
+        accessPending: false,
+        accessDenied: false,
+        accessError: false,
+        accessReady: false,
+      }),
+      'loading'
+    )
+    assert.equal(
+      getAgentRouteGateState({
+        statusEnabled: true,
+        statusPlaceholder: false,
+        statusPending: false,
+        statusError: false,
+        accessPending: false,
+        accessDenied: false,
+        accessError: false,
+        accessReady: true,
+      }),
+      'ready'
+    )
+  })
+
+  test('separates status/access failures from confirmed denials', () => {
+    const base = {
+      statusEnabled: true,
+      statusPlaceholder: false,
+      statusPending: false,
+      statusError: false,
+      accessPending: false,
+      accessDenied: false,
+      accessError: false,
+      accessReady: false,
+    }
+    assert.equal(
+      getAgentRouteGateState({ ...base, statusError: true }),
+      'error'
+    )
+    assert.equal(
+      getAgentRouteGateState({ ...base, accessError: true }),
+      'error'
+    )
+    assert.equal(
+      getAgentRouteGateState({ ...base, accessDenied: true }),
+      'denied'
+    )
+    assert.equal(
+      getAgentRouteGateState({
+        ...base,
+        statusEnabled: false,
+        accessError: true,
+      }),
+      'denied'
+    )
+  })
+
+  test('retries both status and access after either gate failure', async () => {
+    let statusRetries = 0
+    let accessRetries = 0
+    await retryAgentRouteGate(
+      async () => {
+        statusRetries += 1
+      },
+      async () => {
+        accessRetries += 1
+      }
+    )
+    assert.equal(statusRetries, 1)
+    assert.equal(accessRetries, 1)
+  })
+})
+
 describe('agent refund selection', () => {
   test('allows only visible, unused, unexpired inventory', () => {
     assert.equal(isRefundableAgentCode(code(), 100), true)
@@ -100,7 +187,7 @@ describe('agent refund selection', () => {
 })
 
 describe('agent mutation stability', () => {
-  test('retains idempotency for retries and rotates for new payload or success', () => {
+  test('retains purchase retry idempotency and rotates on offer switch or success', () => {
     const generated = ['key-1', 'key-2', 'key-3']
     const store = new AgentIdempotencyKeyStore(
       () => generated.shift() ?? 'unexpected-key'
@@ -108,9 +195,9 @@ describe('agent mutation stability', () => {
 
     assert.equal(store.keyFor('plan=1&quantity=2'), 'key-1')
     assert.equal(store.keyFor('plan=1&quantity=2'), 'key-1')
-    assert.equal(store.keyFor('plan=1&quantity=3'), 'key-2')
+    assert.equal(store.keyFor('plan=2&quantity=2'), 'key-2')
     store.complete()
-    assert.equal(store.keyFor('plan=1&quantity=3'), 'key-3')
+    assert.equal(store.keyFor('plan=2&quantity=2'), 'key-3')
   })
 
   test('invalidates only the four agent read families', () => {
@@ -120,5 +207,57 @@ describe('agent mutation stability', () => {
       ['agent', 'codes'],
       ['agent', 'credit-logs'],
     ])
+  })
+
+  test('blocks pending close and rotates a second refund after close and reopen', () => {
+    const generated = ['key-1', 'key-2']
+    const store = new AgentIdempotencyKeyStore(
+      () => generated.shift() ?? 'unexpected-key'
+    )
+    assert.equal(store.keyFor('refund=1'), 'key-1')
+    assert.equal(canChangeAgentDialogOpen(false, true), false)
+    assert.equal(canChangeAgentDialogOpen(false, false), true)
+    resetAgentDialogLifecycle(store)
+    assert.equal(store.keyFor('refund=1'), 'key-2')
+  })
+})
+
+describe('agent query presentation', () => {
+  test('shows errors before empty states and allows retry', () => {
+    assert.equal(
+      getAgentQueryView({ loading: false, error: true, hasData: false }),
+      'error'
+    )
+    assert.equal(
+      getAgentQueryView({ loading: false, error: false, hasData: false }),
+      'empty'
+    )
+  })
+
+  test('never retains user A page data for user B', () => {
+    const page = { items: [{ id: 1 }], total: 1 }
+    assert.equal(retainSameAgentPage(2, 1, page), undefined)
+    assert.equal(retainSameAgentPage(1, 1, page), page)
+    assert.notDeepEqual(
+      agentUserQueryKey(['agent', 'codes'], 1, 1),
+      agentUserQueryKey(['agent', 'codes'], 2, 1)
+    )
+  })
+
+  test('revokes the CSV object URL even when the browser click fails', () => {
+    const revoked: string[] = []
+    assert.throws(() =>
+      downloadAgentExport(
+        { blob: new Blob(['code\n']), filename: 'agent-codes.csv' },
+        {
+          createObjectURL: () => 'blob:agent-codes',
+          revokeObjectURL: (url) => revoked.push(url),
+          click: () => {
+            throw new Error('blocked download')
+          },
+        }
+      )
+    )
+    assert.deepEqual(revoked, ['blob:agent-codes'])
   })
 })

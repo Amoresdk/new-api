@@ -40,12 +40,15 @@ import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select'
 import { Spinner } from '@/components/ui/spinner'
 import { useAuthStore } from '@/stores/auth-store'
 
-import { exportAgentCodes, getAgentCodes, getAgentOffers } from '../api'
+import { exportAgentCodes, getAgentCodes } from '../api'
 import { deriveAgentCodeStatus } from '../lib/money'
 import {
   agentQueryKeys,
+  agentUserQueryKey,
+  downloadAgentExport,
   isRefundableAgentCode,
   localDateInputToTimestamp,
+  retainSameAgentPage,
   timestampToLocalDateInput,
   toggleRefundSelection,
   type AgentWorkspaceSearch,
@@ -59,6 +62,12 @@ type AgentCodesTableProps = {
   onSearchChange: (updates: Partial<AgentWorkspaceSearch>) => void
 }
 
+type AgentCodesTableMeta = {
+  selectedIDs: ReadonlySet<number>
+  toggleCode: (code: AgentCode, checked: boolean) => void
+  copyCode: (code: AgentCode) => Promise<void>
+}
+
 export function AgentCodesTable(props: AgentCodesTableProps) {
   const { t } = useTranslation()
   const userID = useAuthStore((state) => state.auth.user?.id ?? 0)
@@ -67,16 +76,9 @@ export function AgentCodesTable(props: AgentCodesTableProps) {
   const [exportPending, setExportPending] = useState(false)
   const page = props.search.p ?? 1
   const pageSize = props.search.page_size ?? 20
-  const offersQuery = useQuery({
-    queryKey: agentQueryKeys.offers,
-    queryFn: async () => {
-      const response = await getAgentOffers()
-      return response.success ? response.data : []
-    },
-  })
   const codesQuery = useQuery({
-    queryKey: [
-      ...agentQueryKeys.codes,
+    queryKey: agentUserQueryKey(
+      agentQueryKeys.codes,
       userID,
       page,
       pageSize,
@@ -84,8 +86,8 @@ export function AgentCodesTable(props: AgentCodesTableProps) {
       props.search.order_id,
       props.search.code_status,
       props.search.start_timestamp,
-      props.search.end_timestamp,
-    ],
+      props.search.end_timestamp
+    ),
     queryFn: async () => {
       const response = await getAgentCodes({
         p: page,
@@ -99,20 +101,29 @@ export function AgentCodesTable(props: AgentCodesTableProps) {
       if (!response.success) throw new Error('Agent codes unavailable')
       return response.data
     },
-    placeholderData: (previous) => previous,
+    placeholderData: (previous, previousQuery) =>
+      retainSameAgentPage(
+        userID,
+        typeof previousQuery?.queryKey[2] === 'number'
+          ? previousQuery.queryKey[2]
+          : undefined,
+        previous
+      ),
   })
 
   const toggleCode = useCallback(
     (code: AgentCode, checked: boolean) => {
       if (checked && !isRefundableAgentCode(code)) return
-      const result = toggleRefundSelection(selectedIDs, code.id, checked)
-      if (!result.changed && checked && !selectedIDs.has(code.id)) {
-        toast.error(t('You can select at most 100 codes for one refund.'))
-        return
-      }
-      setSelectedIDs(result.selection)
+      setSelectedIDs((current) => {
+        const result = toggleRefundSelection(current, code.id, checked)
+        if (!result.changed && checked && !current.has(code.id)) {
+          toast.error(t('You can select at most 100 codes for one refund.'))
+          return current
+        }
+        return result.selection
+      })
     },
-    [selectedIDs, t]
+    [t]
   )
 
   const copyCode = useCallback(
@@ -133,14 +144,17 @@ export function AgentCodesTable(props: AgentCodesTableProps) {
       {
         id: 'select',
         header: t('Refund'),
-        cell: ({ row }) => {
+        cell: ({ row, table: currentTable }) => {
+          const meta = currentTable.options.meta as AgentCodesTableMeta
           const refundable = isRefundableAgentCode(row.original)
           return (
             <Checkbox
               aria-label={t('Select code for refund')}
-              checked={selectedIDs.has(row.original.id)}
+              checked={meta.selectedIDs.has(row.original.id)}
               disabled={!refundable}
-              onCheckedChange={(checked) => toggleCode(row.original, checked)}
+              onCheckedChange={(checked) =>
+                meta.toggleCode(row.original, checked)
+              }
             />
           )
         },
@@ -148,7 +162,8 @@ export function AgentCodesTable(props: AgentCodesTableProps) {
       {
         accessorKey: 'code',
         header: t('Code'),
-        cell: ({ row }) => {
+        cell: ({ row, table: currentTable }) => {
+          const meta = currentTable.options.meta as AgentCodesTableMeta
           const code = row.original
           if (!code.code_visible || !code.code) {
             return <span className='text-muted-foreground'>{t('Hidden')}</span>
@@ -161,7 +176,7 @@ export function AgentCodesTable(props: AgentCodesTableProps) {
                 variant='ghost'
                 size='icon-sm'
                 aria-label={t('Copy code')}
-                onClick={() => copyCode(code)}
+                onClick={() => meta.copyCode(code)}
               >
                 <HugeiconsIcon
                   icon={Copy01Icon}
@@ -211,7 +226,7 @@ export function AgentCodesTable(props: AgentCodesTableProps) {
           new Date(row.original.expired_at * 1000).toLocaleString(),
       },
     ],
-    [copyCode, selectedIDs, t, toggleCode]
+    [t]
   )
 
   const table = useReactTable({
@@ -220,6 +235,8 @@ export function AgentCodesTable(props: AgentCodesTableProps) {
     getCoreRowModel: getCoreRowModel(),
     manualPagination: true,
     rowCount: codesQuery.data?.total ?? 0,
+    getRowId: (row) => row.id.toString(),
+    meta: { selectedIDs, toggleCode, copyCode } satisfies AgentCodesTableMeta,
   })
 
   const updateFilters = (updates: Partial<AgentWorkspaceSearch>) =>
@@ -228,19 +245,23 @@ export function AgentCodesTable(props: AgentCodesTableProps) {
   const downloadCSV = async () => {
     setExportPending(true)
     try {
-      const blob = await exportAgentCodes({
+      const file = await exportAgentCodes({
         plan_id: props.search.plan_id,
         order_id: props.search.order_id,
         status: props.search.code_status,
         start_timestamp: props.search.start_timestamp,
         end_timestamp: props.search.end_timestamp,
       })
-      const url = URL.createObjectURL(blob)
-      const anchor = document.createElement('a')
-      anchor.href = url
-      anchor.download = `agent-codes-${new Date().toISOString().slice(0, 10)}.csv`
-      anchor.click()
-      URL.revokeObjectURL(url)
+      downloadAgentExport(file, {
+        createObjectURL: (blob) => URL.createObjectURL(blob),
+        revokeObjectURL: (url) => URL.revokeObjectURL(url),
+        click: (url, filename) => {
+          const anchor = document.createElement('a')
+          anchor.href = url
+          anchor.download = filename
+          anchor.click()
+        },
+      })
       toast.success(t('CSV export downloaded'))
     } catch {
       toast.error(t('Failed to export package codes'))
@@ -255,6 +276,8 @@ export function AgentCodesTable(props: AgentCodesTableProps) {
         table={table}
         isLoading={codesQuery.isPending}
         isFetching={codesQuery.isFetching}
+        error={codesQuery.error}
+        onRetry={() => codesQuery.refetch()}
         emptyTitle={t('No package codes found')}
         emptyDescription={t(
           'Purchased package codes will appear in this inventory.'
@@ -265,8 +288,12 @@ export function AgentCodesTable(props: AgentCodesTableProps) {
         onPageChange={(nextPage) => props.onSearchChange({ p: nextPage })}
         filters={
           <>
-            <NativeSelect
+            <Input
+              type='number'
+              min={1}
+              className='w-32'
               aria-label={t('Filter codes by plan')}
+              placeholder={t('Plan ID')}
               value={props.search.plan_id?.toString() ?? ''}
               onChange={(event) =>
                 updateFilters({
@@ -275,14 +302,7 @@ export function AgentCodesTable(props: AgentCodesTableProps) {
                     : undefined,
                 })
               }
-            >
-              <NativeSelectOption value=''>{t('All plans')}</NativeSelectOption>
-              {offersQuery.data?.map((offer) => (
-                <NativeSelectOption key={offer.plan_id} value={offer.plan_id}>
-                  {offer.plan.title}
-                </NativeSelectOption>
-              ))}
-            </NativeSelect>
+            />
             <NativeSelect
               aria-label={t('Filter codes by status')}
               value={props.search.code_status ?? ''}

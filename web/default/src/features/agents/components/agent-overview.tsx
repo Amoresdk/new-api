@@ -39,7 +39,7 @@ import { useAuthStore } from '@/stores/auth-store'
 
 import { getAgentOverview } from '../api'
 import { formatAgentPoints } from '../lib/money'
-import { agentQueryKeys } from '../lib/workspace'
+import { agentQueryKeys, agentUserQueryKey } from '../lib/workspace'
 import type { AgentOverview as AgentOverviewData } from '../types'
 
 type AgentOverviewProps = {
@@ -68,7 +68,7 @@ export function AgentOverview(props: AgentOverviewProps) {
   const { t } = useTranslation()
   const userID = useAuthStore((state) => state.auth.user?.id ?? 0)
   const query = useQuery({
-    queryKey: [...agentQueryKeys.overview, userID],
+    queryKey: agentUserQueryKey(agentQueryKeys.overview, userID),
     queryFn: async () => {
       const response = await getAgentOverview()
       if (!response.success) throw new Error('Agent overview unavailable')

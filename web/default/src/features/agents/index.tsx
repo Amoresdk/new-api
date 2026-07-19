@@ -101,7 +101,7 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
               <TabsTrigger value='ledger'>{t('Point ledger')}</TabsTrigger>
             </TabsList>
           </div>
-          <TabsContent value='overview' className='space-y-6 pt-2'>
+          <TabsContent value='overview' className='flex flex-col gap-6 pt-2'>
             <AgentOverview initialOverview={props.initialOverview} />
             <AgentOffers />
           </TabsContent>
