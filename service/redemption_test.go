@@ -200,6 +200,51 @@ func TestRedeemCodeSubscriptionUsesSoldSnapshotAfterPlanChanges(t *testing.T) {
 	assert.Contains(t, logs[0].Content, fmt.Sprintf("%d", code.Id))
 }
 
+func TestRedeemCodeSubscriptionInvalidatesUserCacheOnlyAfterCommit(t *testing.T) {
+	setupRedemptionServiceTest(t)
+	user := createRedemptionUser(t, 7004, "starter")
+	raw, err := model.EncodeSubscriptionEntitlementSnapshot(validRedemptionSnapshot(9001))
+	require.NoError(t, err)
+	_, validCode := createSubscriptionRedemption(t, "42000000000000000000000000000002", raw, common.RedemptionCodeStatusEnabled, common.GetTimestamp()+3600)
+	_, invalidCode := createSubscriptionRedemption(t, "42000000000000000000000000000003", "{", common.RedemptionCodeStatusEnabled, common.GetTimestamp()+3600)
+
+	originalInvalidator := invalidateRedemptionUserCacheAfterCommit
+	invalidatedUserIDs := make([]int, 0, 1)
+	var observedCodeStatus int
+	var observedSubscriptions int64
+	var observationErr error
+	invalidateRedemptionUserCacheAfterCommit = func(userID int) error {
+		invalidatedUserIDs = append(invalidatedUserIDs, userID)
+		var storedCode model.Redemption
+		if err := model.DB.First(&storedCode, validCode.Id).Error; err != nil {
+			observationErr = err
+			return err
+		}
+		observedCodeStatus = storedCode.Status
+		if err := model.DB.Model(&model.UserSubscription{}).
+			Where("user_id = ?", userID).Count(&observedSubscriptions).Error; err != nil {
+			observationErr = err
+			return err
+		}
+		return nil
+	}
+	t.Cleanup(func() { invalidateRedemptionUserCacheAfterCommit = originalInvalidator })
+
+	_, err = RedeemCode(user.Id, validCode.Key)
+	require.NoError(t, err)
+	require.NoError(t, observationErr)
+	assert.Equal(t, []int{user.Id}, invalidatedUserIDs)
+	assert.Equal(t, common.RedemptionCodeStatusUsed, observedCodeStatus)
+	assert.Equal(t, int64(1), observedSubscriptions)
+
+	_, err = RedeemCode(user.Id, invalidCode.Key)
+	require.Error(t, err)
+	assert.Equal(t, []int{user.Id}, invalidatedUserIDs, "rolled-back delivery must not run cache effects")
+	var storedInvalidCode model.Redemption
+	require.NoError(t, model.DB.First(&storedInvalidCode, invalidCode.Id).Error)
+	assert.Equal(t, common.RedemptionCodeStatusEnabled, storedInvalidCode.Status)
+}
+
 func TestRedeemCodeSubscriptionRejectsInvalidStatesUniformly(t *testing.T) {
 	tests := []struct {
 		name        string

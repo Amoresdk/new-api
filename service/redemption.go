@@ -16,6 +16,8 @@ const (
 
 var ErrRedeemCodeFailed = errors.New("redemption failed")
 
+var invalidateRedemptionUserCacheAfterCommit = model.InvalidateUserCache
+
 type RedemptionResult struct {
 	Type           string `json:"type"`
 	Quota          *int   `json:"quota,omitempty"`
@@ -125,8 +127,8 @@ func redeemSubscriptionCode(userID int, key string) (*RedemptionResult, error) {
 		return nil, redeemCodeError(err)
 	}
 
-	if snapshot.UpgradeGroup != "" {
-		_ = model.UpdateUserGroupCache(userID, snapshot.UpgradeGroup)
+	if err := invalidateRedemptionUserCacheAfterCommit(userID); err != nil {
+		common.SysError(fmt.Sprintf("failed to invalidate redeemed user cache for user %d: %v", userID, err))
 	}
 	model.RecordLog(userID, model.LogTypeTopup,
 		fmt.Sprintf("通过代理套餐兑换码激活订阅 %s，兑换码ID %d", snapshot.PlanTitle, redeemedCode.Id))
