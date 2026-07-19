@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -594,6 +595,26 @@ func getUserGroupByIdTx(tx *gorm.DB, userId int) (string, error) {
 	return group, nil
 }
 
+// serializeSubscriptionUserTx establishes the single lock order used by every
+// transaction that can mutate both a user group and subscriptions:
+// User -> UserSubscription. The self-assignment is a portable write lock for
+// SQLite, MySQL, and PostgreSQL; the following read establishes existence even
+// on MySQL configurations that report zero affected rows for no-op updates.
+func serializeSubscriptionUserTx(tx *gorm.DB, userId int) (*User, error) {
+	if tx == nil || userId <= 0 {
+		return nil, errors.New("invalid subscription user serialization args")
+	}
+	if err := tx.Model(&User{}).Where("id = ?", userId).
+		UpdateColumn("id", gorm.Expr("id")).Error; err != nil {
+		return nil, err
+	}
+	var user User
+	if err := lockForUpdate(tx).First(&user, userId).Error; err != nil {
+		return nil, err
+	}
+	return &user, nil
+}
+
 func downgradeUserGroupForSubscriptionTx(tx *gorm.DB, sub *UserSubscription, now int64) (string, error) {
 	if tx == nil || sub == nil {
 		return "", errors.New("invalid downgrade args")
@@ -656,17 +677,8 @@ func CreateUserSubscriptionFromEntitlementTx(tx *gorm.DB, userId int, snapshot S
 	if userId <= 0 {
 		return nil, errors.New("invalid user id")
 	}
-	// Serialize every entitlement delivery for one user with a real write.
-	// SELECT FOR UPDATE alone is not portable to SQLite, while a self-assignment
-	// update takes the user row/write lock on every supported database. MySQL may
-	// report zero affected rows for this no-op, so existence is established by
-	// the independent current read below rather than RowsAffected.
-	if err := tx.Model(&User{}).Where("id = ?", userId).
-		UpdateColumn("id", gorm.Expr("id")).Error; err != nil {
-		return nil, err
-	}
-	var entitlementUser User
-	if err := lockForUpdate(tx).First(&entitlementUser, userId).Error; err != nil {
+	entitlementUser, err := serializeSubscriptionUserTx(tx, userId)
+	if err != nil {
 		return nil, err
 	}
 	if snapshot.MaxPurchasePerUser > 0 {
@@ -1092,14 +1104,23 @@ func AdminInvalidateUserSubscription(userSubscriptionId int) (string, error) {
 	now := common.GetTimestamp()
 	cacheGroup := ""
 	downgradeGroup := ""
-	var userId int
+	var lookup UserSubscription
+	if err := DB.Select("id", "user_id").Where("id = ?", userSubscriptionId).First(&lookup).Error; err != nil {
+		return "", err
+	}
+	userId := lookup.UserId
 	err := DB.Transaction(func(tx *gorm.DB) error {
+		if _, err := serializeSubscriptionUserTx(tx, userId); err != nil {
+			return err
+		}
 		var sub UserSubscription
 		if err := lockForUpdate(tx).
 			Where("id = ?", userSubscriptionId).First(&sub).Error; err != nil {
 			return err
 		}
-		userId = sub.UserId
+		if sub.UserId != userId {
+			return errors.New("subscription owner changed concurrently")
+		}
 		if err := tx.Model(&sub).Updates(map[string]interface{}{
 			"status":     "cancelled",
 			"end_time":   now,
@@ -1137,14 +1158,23 @@ func AdminDeleteUserSubscription(userSubscriptionId int) (string, error) {
 	now := common.GetTimestamp()
 	cacheGroup := ""
 	downgradeGroup := ""
-	var userId int
+	var lookup UserSubscription
+	if err := DB.Select("id", "user_id").Where("id = ?", userSubscriptionId).First(&lookup).Error; err != nil {
+		return "", err
+	}
+	userId := lookup.UserId
 	err := DB.Transaction(func(tx *gorm.DB) error {
+		if _, err := serializeSubscriptionUserTx(tx, userId); err != nil {
+			return err
+		}
 		var sub UserSubscription
 		if err := lockForUpdate(tx).
 			Where("id = ?", userSubscriptionId).First(&sub).Error; err != nil {
 			return err
 		}
-		userId = sub.UserId
+		if sub.UserId != userId {
+			return errors.New("subscription owner changed concurrently")
+		}
 		target, err := downgradeUserGroupForSubscriptionTx(tx, &sub, now)
 		if err != nil {
 			return err
@@ -1314,15 +1344,23 @@ func ExpireDueSubscriptions(limit int) (int, error) {
 		return 0, nil
 	}
 	expiredCount := 0
-	userIds := make(map[int]struct{}, len(subs))
+	userIdSet := make(map[int]struct{}, len(subs))
 	for _, sub := range subs {
 		if sub.UserId > 0 {
-			userIds[sub.UserId] = struct{}{}
+			userIdSet[sub.UserId] = struct{}{}
 		}
 	}
-	for userId := range userIds {
+	userIds := make([]int, 0, len(userIdSet))
+	for userId := range userIdSet {
+		userIds = append(userIds, userId)
+	}
+	sort.Ints(userIds)
+	for _, userId := range userIds {
 		cacheGroup := ""
 		err := DB.Transaction(func(tx *gorm.DB) error {
+			if _, err := serializeSubscriptionUserTx(tx, userId); err != nil {
+				return err
+			}
 			res := tx.Model(&UserSubscription{}).
 				Where("user_id = ? AND status = ? AND end_time > 0 AND end_time <= ?", userId, "active", now).
 				Updates(map[string]interface{}{

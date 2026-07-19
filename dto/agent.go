@@ -115,6 +115,34 @@ type AgentPurchaseResponse struct {
 	BalanceAfter string                     `json:"balance_after"`
 }
 
+type AgentRefundRequest struct {
+	RedemptionIds  []int  `json:"redemption_ids"`
+	IdempotencyKey string `json:"idempotency_key"`
+}
+
+type AgentAdminRefundRequest struct {
+	AgentUserId    int    `json:"agent_user_id"`
+	RedemptionIds  []int  `json:"redemption_ids"`
+	IdempotencyKey string `json:"idempotency_key"`
+}
+
+type AgentRefundResponse struct {
+	RequestId     int    `json:"request_id"`
+	RedemptionIds []int  `json:"redemption_ids"`
+	Fee           string `json:"fee"`
+	Refunded      string `json:"refunded"`
+	BalanceAfter  string `json:"balance_after"`
+}
+
+type AgentReconciliationResponse struct {
+	AgentUserId int    `json:"agent_user_id"`
+	Balance     string `json:"balance"`
+	LedgerSum   string `json:"ledger_sum"`
+	Difference  string `json:"difference"`
+	LedgerCount int64  `json:"ledger_count"`
+	Matches     bool   `json:"matches"`
+}
+
 // AgentSubscriptionPlanResponse is the current plan catalog entry paired with
 // an agent offer. Purchase-time entitlements are snapshotted separately.
 type AgentSubscriptionPlanResponse struct {

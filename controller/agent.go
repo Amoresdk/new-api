@@ -88,6 +88,32 @@ func CreateAgentOrder(c *gin.Context) {
 	})
 }
 
+func RefundAgentCodes(c *gin.Context) {
+	var request dto.AgentRefundRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		common.ApiErrorMsg(c, "invalid refund request")
+		return
+	}
+	userID := c.GetInt("id")
+	result, err := service.RefundAgentCodes(service.AgentRefundInput{
+		AgentUserID: userID, RedemptionIDs: request.RedemptionIds,
+		IdempotencyKey: request.IdempotencyKey, RequestedBy: userID,
+	})
+	if err != nil {
+		writeAgentError(c, err)
+		return
+	}
+	common.ApiSuccess(c, agentRefundResponse(result))
+}
+
+func agentRefundResponse(result *service.AgentRefundResult) dto.AgentRefundResponse {
+	return dto.AgentRefundResponse{
+		RequestId: result.RequestID, RedemptionIds: result.RedemptionIDs,
+		Fee: service.FormatAgentPoints(result.Fee), Refunded: service.FormatAgentPoints(result.Refunded),
+		BalanceAfter: service.FormatAgentPoints(result.BalanceAfter),
+	}
+}
+
 func GetAgentOrders(c *gin.Context) {
 	page, ok := parseAgentQueryPage(c)
 	if !ok {
@@ -309,13 +335,15 @@ func writeAgentError(c *gin.Context, err error) {
 	case errors.Is(err, service.ErrAgentDailyLimitExceeded):
 		common.ApiErrorMsg(c, "daily code purchase limit exceeded")
 	case errors.Is(err, service.ErrAgentIdempotencyConflict):
-		common.ApiErrorMsg(c, "idempotency key was already used for a different purchase")
+		common.ApiErrorMsg(c, "idempotency key was already used for a different request")
 	case errors.Is(err, service.ErrAgentAccountConflict):
 		common.ApiErrorMsg(c, "agent account changed concurrently; please retry")
 	case errors.Is(err, service.ErrAgentQueryInvalid):
 		common.ApiErrorMsg(c, "invalid agent query parameters")
 	case errors.Is(err, service.ErrAgentExportLimitExceeded):
 		common.ApiErrorMsg(c, "code export exceeds the 10000 row limit")
+	case errors.Is(err, service.ErrAgentRefundInvalidRequest), errors.Is(err, service.ErrAgentRefundUnavailable):
+		common.ApiErrorMsg(c, "package codes are unavailable for refund")
 	default:
 		common.SysError("agent operation failed: " + err.Error())
 		common.ApiErrorMsg(c, "agent operation failed")

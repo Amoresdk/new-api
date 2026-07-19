@@ -62,6 +62,7 @@ func SetApiRouter(router *gin.Engine) {
 			agentAdminReadRoute.GET("/offers", controller.AdminListAgentPlanOffers)
 			agentAdminReadRoute.GET("/orders", controller.AdminListAgentOrders)
 			agentAdminReadRoute.GET("/codes", controller.AdminListAgentCodes)
+			agentAdminReadRoute.GET("/agents/:user_id/reconciliation", controller.AdminReconcileAgentAccount)
 		}
 		agentAdminMutationRoute := apiRouter.Group("/agent-admin")
 		agentAdminMutationRoute.Use(middleware.RootAuth())
@@ -71,6 +72,7 @@ func SetApiRouter(router *gin.Engine) {
 			agentAdminMutationRoute.PATCH("/agents/:user_id/limit", controller.RootUpdateAgentDailyLimit)
 			agentAdminMutationRoute.POST("/agents/:user_id/credit-adjustments", controller.RootAdjustAgentCredit)
 			agentAdminMutationRoute.PUT("/offers/:plan_id", controller.RootUpsertAgentPlanOffer)
+			agentAdminMutationRoute.POST("/codes/refund", middleware.CriticalRateLimit(), controller.RootRefundAgentCodes)
 		}
 		agentRoute := apiRouter.Group("/agent")
 		agentRoute.Use(middleware.UserAuth())
@@ -82,6 +84,7 @@ func SetApiRouter(router *gin.Engine) {
 			agentRoute.GET("/codes/export", controller.ExportAgentCodes)
 			agentRoute.GET("/credit-logs", controller.GetAgentCreditLogs)
 			agentRoute.POST("/orders", middleware.CriticalRateLimit(), controller.CreateAgentOrder)
+			agentRoute.POST("/codes/refund", middleware.CriticalRateLimit(), controller.RefundAgentCodes)
 		}
 
 		apiRouter.POST("/stripe/webhook", anonymousRequestBodyLimit, controller.StripeWebhook)

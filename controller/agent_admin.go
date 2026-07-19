@@ -3,6 +3,7 @@ package controller
 import (
 	"errors"
 	"strconv"
+	"strings"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
@@ -98,6 +99,47 @@ func AdminListAgentCodes(c *gin.Context) {
 		return
 	}
 	writeAgentQueryPage(c, page, total, records)
+}
+
+func AdminReconcileAgentAccount(c *gin.Context) {
+	userID, err := agentAdminUserID(c)
+	if err != nil {
+		common.ApiErrorMsg(c, "invalid agent user ID")
+		return
+	}
+	result, err := service.ReconcileAgentAccount(userID)
+	if err != nil {
+		writeAgentAdminError(c, err)
+		return
+	}
+	common.ApiSuccess(c, dto.AgentReconciliationResponse{
+		AgentUserId: result.AgentUserID, Balance: service.FormatAgentPoints(result.Balance),
+		LedgerSum: service.FormatAgentPoints(result.LedgerSum), Difference: service.FormatAgentPoints(result.Difference),
+		LedgerCount: result.LedgerCount, Matches: result.Matches,
+	})
+}
+
+func RootRefundAgentCodes(c *gin.Context) {
+	var request dto.AgentAdminRefundRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		common.ApiErrorMsg(c, "invalid refund request")
+		return
+	}
+	request.IdempotencyKey = strings.TrimSpace(request.IdempotencyKey)
+	result, err := service.RefundAgentCodes(service.AgentRefundInput{
+		AgentUserID: request.AgentUserId, RedemptionIDs: request.RedemptionIds,
+		IdempotencyKey: request.IdempotencyKey, RequestedBy: c.GetInt("id"), RootOverride: true,
+	})
+	if err != nil {
+		writeAgentAdminError(c, err)
+		return
+	}
+	recordManageAuditFor(c, request.AgentUserId, "agent.refund", map[string]interface{}{
+		"agent_user_id": request.AgentUserId, "request_id": result.RequestID, "redemption_ids": result.RedemptionIDs,
+		"fee": service.FormatAgentPoints(result.Fee), "refunded": service.FormatAgentPoints(result.Refunded),
+		"balance_after": service.FormatAgentPoints(result.BalanceAfter), "idempotency_key": request.IdempotencyKey,
+	})
+	common.ApiSuccess(c, agentRefundResponse(result))
 }
 
 func RootEnableAgent(c *gin.Context) {
@@ -338,7 +380,7 @@ func writeAgentAdminError(c *gin.Context, err error) {
 	case errors.Is(err, service.ErrAgentInsufficientBalance):
 		common.ApiErrorMsg(c, "agent balance is insufficient")
 	case errors.Is(err, service.ErrAgentIdempotencyConflict):
-		common.ApiErrorMsg(c, "idempotency key was already used for a different adjustment")
+		common.ApiErrorMsg(c, "idempotency key was already used for a different request")
 	case errors.Is(err, service.ErrAgentAccountConflict):
 		common.ApiErrorMsg(c, "agent account changed concurrently; please retry")
 	case errors.Is(err, service.ErrAgentBalanceOverflow):
@@ -353,6 +395,12 @@ func writeAgentAdminError(c *gin.Context, err error) {
 		common.ApiErrorMsg(c, "refund fee must be between 0 and 10000 basis points")
 	case errors.Is(err, service.ErrAgentQueryInvalid):
 		common.ApiErrorMsg(c, "invalid agent query parameters")
+	case errors.Is(err, service.ErrAgentRefundInvalidRequest):
+		common.ApiErrorMsg(c, "invalid refund request")
+	case errors.Is(err, service.ErrAgentRefundUnavailable):
+		common.ApiErrorMsg(c, "package codes are unavailable for refund")
+	case errors.Is(err, service.ErrAgentReconciliation):
+		common.ApiErrorMsg(c, "agent reconciliation failed")
 	default:
 		common.SysError("agent administration failed: " + err.Error())
 		common.ApiErrorMsg(c, "agent account operation failed")
