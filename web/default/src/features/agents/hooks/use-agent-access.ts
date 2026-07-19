@@ -22,13 +22,28 @@ import axios from 'axios'
 import { useStatus } from '@/hooks/use-status'
 import { useAuthStore } from '@/stores/auth-store'
 
-import { getAgentOverview } from '../api'
+import { getAgentAccessOverview } from '../api'
+import type { AgentOverview, ApiResult } from '../types'
 
 export const agentAccessQueryKey = (userID: number) =>
   ['agent', 'access', userID] as const
 
 function isAgentAccessDenied(error: unknown): boolean {
   return axios.isAxiosError(error) && error.response?.status === 403
+}
+
+type AgentAccessProbe = () => Promise<ApiResult<AgentOverview>>
+
+export async function resolveAgentAccess(
+  probe: AgentAccessProbe = getAgentAccessOverview
+): Promise<AgentOverview | null> {
+  try {
+    const response = await probe()
+    return response.success ? response.data : null
+  } catch (error) {
+    if (isAgentAccessDenied(error)) return null
+    throw error
+  }
 }
 
 export function useAgentAccess() {
@@ -39,18 +54,7 @@ export function useAgentAccess() {
 
   const query = useQuery({
     queryKey: agentAccessQueryKey(userID ?? 0),
-    queryFn: async () => {
-      try {
-        const response = await getAgentOverview({
-          skipBusinessError: true,
-          skipErrorHandler: true,
-        })
-        return response.success ? response.data : null
-      } catch (error) {
-        if (isAgentAccessDenied(error)) return null
-        throw error
-      }
-    },
+    queryFn: () => resolveAgentAccess(),
     enabled: shouldCheck,
     staleTime: 30_000,
     gcTime: 5 * 60_000,

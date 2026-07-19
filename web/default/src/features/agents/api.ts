@@ -24,6 +24,7 @@ import {
   adminAgentRefundRequestSchema,
   adminAgentSchema,
   agentCodeSchema,
+  agentCodeStatusSchema,
   agentCreditAdjustmentRequestSchema,
   agentCreditAdjustmentResponseSchema,
   agentCreditLogSchema,
@@ -31,6 +32,7 @@ import {
   agentOfferSchema,
   agentOfferUpsertRequestSchema,
   agentOrderSchema,
+  agentOrderStatusSchema,
   agentOverviewSchema,
   agentPageSchema,
   agentPurchaseRequestSchema,
@@ -102,11 +104,96 @@ const csvResponseSchema = z
   })
   .strict()
 
+const pageFilterFields = {
+  p: z.number().int().positive().optional(),
+  page_size: z.number().int().positive().max(100).optional(),
+  start_timestamp: z.number().int().nonnegative().optional(),
+  end_timestamp: z.number().int().nonnegative().optional(),
+}
+const selfOrderParamsSchema = z
+  .object({
+    ...pageFilterFields,
+    plan_id: positiveIDSchema.optional(),
+    status: agentOrderStatusSchema.optional(),
+  })
+  .strict()
+const adminOrderParamsSchema = selfOrderParamsSchema.extend({
+  agent_user_id: positiveIDSchema.optional(),
+})
+const selfCodeParamsSchema = z
+  .object({
+    ...pageFilterFields,
+    plan_id: positiveIDSchema.optional(),
+    order_id: positiveIDSchema.optional(),
+    status: agentCodeStatusSchema.optional(),
+  })
+  .strict()
+const adminCodeParamsSchema = selfCodeParamsSchema.extend({
+  agent_user_id: positiveIDSchema.optional(),
+})
+const selfExportCodeParamsSchema = selfCodeParamsSchema.omit({
+  p: true,
+  page_size: true,
+})
+
+type SelfOrderParams = z.infer<typeof selfOrderParamsSchema>
+type SelfCodeParams = z.infer<typeof selfCodeParamsSchema>
+type SelfExportCodeParams = z.infer<typeof selfExportCodeParamsSchema>
+
+function selfOrderParams(
+  params: Omit<AgentOrderParams, 'agent_user_id'>
+): SelfOrderParams {
+  return selfOrderParamsSchema.parse({
+    p: params.p,
+    page_size: params.page_size,
+    start_timestamp: params.start_timestamp,
+    end_timestamp: params.end_timestamp,
+    plan_id: params.plan_id,
+    status: params.status,
+  })
+}
+
+function selfCodeParams(
+  params: Omit<AgentCodeParams, 'agent_user_id'>
+): SelfCodeParams {
+  return selfCodeParamsSchema.parse({
+    p: params.p,
+    page_size: params.page_size,
+    start_timestamp: params.start_timestamp,
+    end_timestamp: params.end_timestamp,
+    plan_id: params.plan_id,
+    order_id: params.order_id,
+    status: params.status,
+  })
+}
+
+function selfExportCodeParams(
+  params: Omit<AgentCodeParams, 'agent_user_id' | 'p' | 'page_size'>
+): SelfExportCodeParams {
+  return selfExportCodeParamsSchema.parse({
+    start_timestamp: params.start_timestamp,
+    end_timestamp: params.end_timestamp,
+    plan_id: params.plan_id,
+    order_id: params.order_id,
+    status: params.status,
+  })
+}
+
 export async function getAgentOverview(
   config: ApiRequestConfig = {}
 ): Promise<ApiResult<AgentOverview>> {
   const response = await api.get('/api/agent/overview', config)
   return agentOverviewResponseSchema.parse(response.data)
+}
+
+export async function getAgentAccessOverview(): Promise<
+  ApiResult<AgentOverview>
+> {
+  return getAgentOverview({
+    skipBusinessError: true,
+    skipErrorHandler: true,
+    disableDuplicate: true,
+  })
 }
 
 export async function getAgentOffers(): Promise<ApiResult<AgentOffer[]>> {
@@ -125,14 +212,18 @@ export async function purchaseAgentCodes(
 export async function getAgentOrders(
   params: Omit<AgentOrderParams, 'agent_user_id'> = {}
 ): Promise<ApiResult<AgentPage<AgentOrder>>> {
-  const response = await api.get('/api/agent/orders', { params })
+  const response = await api.get('/api/agent/orders', {
+    params: selfOrderParams(params),
+  })
   return agentOrdersResponseSchema.parse(response.data)
 }
 
 export async function getAgentCodes(
   params: Omit<AgentCodeParams, 'agent_user_id'> = {}
 ): Promise<ApiResult<AgentPage<AgentCode>>> {
-  const response = await api.get('/api/agent/codes', { params })
+  const response = await api.get('/api/agent/codes', {
+    params: selfCodeParams(params),
+  })
   return agentCodesResponseSchema.parse(response.data)
 }
 
@@ -140,7 +231,7 @@ export async function exportAgentCodes(
   params: Omit<AgentCodeParams, 'agent_user_id' | 'p' | 'page_size'> = {}
 ): Promise<Blob> {
   const response = await api.get('/api/agent/codes/export', {
-    params,
+    params: selfExportCodeParams(params),
     responseType: 'blob',
   })
   const result = csvResponseSchema.parse({
@@ -199,14 +290,18 @@ export async function getAdminAgentOffers(): Promise<ApiResult<AgentOffer[]>> {
 export async function getAdminAgentOrders(
   params: AgentOrderParams = {}
 ): Promise<ApiResult<AgentPage<AgentOrder>>> {
-  const response = await api.get('/api/agent-admin/orders', { params })
+  const response = await api.get('/api/agent-admin/orders', {
+    params: adminOrderParamsSchema.parse(params),
+  })
   return agentOrdersResponseSchema.parse(response.data)
 }
 
 export async function getAdminAgentCodes(
   params: AgentCodeParams = {}
 ): Promise<ApiResult<AgentPage<AgentCode>>> {
-  const response = await api.get('/api/agent-admin/codes', { params })
+  const response = await api.get('/api/agent-admin/codes', {
+    params: adminCodeParamsSchema.parse(params),
+  })
   return agentCodesResponseSchema.parse(response.data)
 }
 

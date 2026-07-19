@@ -292,18 +292,24 @@ export function agentPageSchema<T extends z.ZodType>(itemSchema: T) {
     .strict()
 }
 
+const idempotencyKeySchema = z
+  .string()
+  .trim()
+  .min(1)
+  .refine((value) => new TextEncoder().encode(value).length <= 96)
+
 export const agentPurchaseRequestSchema = z
   .object({
     plan_id: positiveInteger,
     quantity: integer.min(1).max(100),
-    idempotency_key: z.string().trim().min(1).max(96),
+    idempotency_key: idempotencyKeySchema,
   })
   .strict()
 
 export const agentRefundRequestSchema = z
   .object({
     redemption_ids: z.array(positiveInteger).min(1).max(100),
-    idempotency_key: z.string().trim().min(1).max(96),
+    idempotency_key: idempotencyKeySchema,
   })
   .strict()
 
@@ -316,12 +322,18 @@ const positiveAgentPointInputSchema = z
   .regex(/^\d+(?:\.\d{0,2})?$/)
   .refine((value) => !/^0+(?:\.0{0,2})?$/.test(value))
 
+const agentAdjustmentReasonSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .refine((value) => [...value].length <= 255)
+
 export const agentCreditAdjustmentRequestSchema = z
   .object({
     amount: positiveAgentPointInputSchema,
     direction: z.enum(['credit', 'debit']),
-    reason: z.string().trim().min(1).max(255),
-    idempotency_key: z.string().trim().min(1).max(96),
+    reason: agentAdjustmentReasonSchema,
+    idempotency_key: idempotencyKeySchema,
   })
   .strict()
 
