@@ -66,6 +66,40 @@ func AdminListAgentPlanOffers(c *gin.Context) {
 	common.ApiSuccess(c, items)
 }
 
+func AdminListAgentOrders(c *gin.Context) {
+	page, ok := parseAgentQueryPage(c)
+	if !ok {
+		return
+	}
+	query, ok := parseAgentOrderQuery(c, page, true)
+	if !ok {
+		return
+	}
+	records, total, err := service.ListAdminAgentOrders(query)
+	if err != nil {
+		writeAgentAdminError(c, err)
+		return
+	}
+	writeAgentQueryPage(c, page, total, records)
+}
+
+func AdminListAgentCodes(c *gin.Context) {
+	page, ok := parseAgentQueryPage(c)
+	if !ok {
+		return
+	}
+	query, ok := parseAgentCodeQuery(c, page, true)
+	if !ok {
+		return
+	}
+	records, total, err := service.ListAdminAgentCodes(query)
+	if err != nil {
+		writeAgentAdminError(c, err)
+		return
+	}
+	writeAgentQueryPage(c, page, total, records)
+}
+
 func RootEnableAgent(c *gin.Context) {
 	userID, err := agentAdminUserID(c)
 	if err != nil {
@@ -317,6 +351,8 @@ func writeAgentAdminError(c *gin.Context, err error) {
 		common.ApiErrorMsg(c, "code validity must be between 1 and 3650 days")
 	case errors.Is(err, service.ErrAgentOfferInvalidRefundFee):
 		common.ApiErrorMsg(c, "refund fee must be between 0 and 10000 basis points")
+	case errors.Is(err, service.ErrAgentQueryInvalid):
+		common.ApiErrorMsg(c, "invalid agent query parameters")
 	default:
 		common.SysError("agent administration failed: " + err.Error())
 		common.ApiErrorMsg(c, "agent account operation failed")

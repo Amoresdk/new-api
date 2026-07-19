@@ -2,12 +2,22 @@ package controller
 
 import (
 	"errors"
+	"fmt"
+	"math"
+	"strconv"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/gin-gonic/gin"
 )
+
+type agentQueryPage struct {
+	Page     int
+	PageSize int
+	Offset   int
+}
 
 func GetAgentOverview(c *gin.Context) {
 	overview, err := service.GetAgentOverview(c.GetInt("id"))
@@ -78,6 +88,206 @@ func CreateAgentOrder(c *gin.Context) {
 	})
 }
 
+func GetAgentOrders(c *gin.Context) {
+	page, ok := parseAgentQueryPage(c)
+	if !ok {
+		return
+	}
+	query, ok := parseAgentOrderQuery(c, page, false)
+	if !ok {
+		return
+	}
+	records, total, err := service.ListAgentOrders(c.GetInt("id"), query)
+	if err != nil {
+		writeAgentError(c, err)
+		return
+	}
+	writeAgentQueryPage(c, page, total, records)
+}
+
+func GetAgentCodes(c *gin.Context) {
+	page, ok := parseAgentQueryPage(c)
+	if !ok {
+		return
+	}
+	query, ok := parseAgentCodeQuery(c, page, false)
+	if !ok {
+		return
+	}
+	records, total, err := service.ListAgentCodes(c.GetInt("id"), query)
+	if err != nil {
+		writeAgentError(c, err)
+		return
+	}
+	writeAgentQueryPage(c, page, total, records)
+}
+
+func GetAgentCreditLogs(c *gin.Context) {
+	page, ok := parseAgentQueryPage(c)
+	if !ok {
+		return
+	}
+	startTimestamp, endTimestamp, ok := parseAgentTimeRange(c)
+	if !ok {
+		return
+	}
+	records, total, err := service.ListAgentCreditLogs(c.GetInt("id"), service.AgentCreditLogQuery{
+		EventType: c.Query("event_type"), StartTimestamp: startTimestamp,
+		EndTimestamp: endTimestamp, Offset: page.Offset, Limit: page.PageSize,
+	})
+	if err != nil {
+		writeAgentError(c, err)
+		return
+	}
+	writeAgentQueryPage(c, page, total, records)
+}
+
+func ExportAgentCodes(c *gin.Context) {
+	query, ok := parseAgentCodeQuery(c, agentQueryPage{}, false)
+	if !ok {
+		return
+	}
+	query.AgentUserID = c.GetInt("id")
+	filename := "agent-codes-" + time.Now().UTC().Format("20060102-150405") + ".csv"
+	c.Header("Content-Type", "text/csv; charset=utf-8")
+	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filename))
+	c.Header("Cache-Control", "no-store")
+	c.Header("X-Content-Type-Options", "nosniff")
+	if err := service.ExportAgentCodes(c.Writer, query); err != nil {
+		// ExportAgentCodes validates ownership, active status, and the maximum
+		// row count before writing. Restore JSON headers for those safe errors.
+		if !c.Writer.Written() {
+			c.Writer.Header().Del("Content-Disposition")
+			c.Writer.Header().Set("Content-Type", "application/json; charset=utf-8")
+			writeAgentError(c, err)
+			return
+		}
+		common.SysError("agent code export failed after response started: " + err.Error())
+	}
+}
+
+func parseAgentQueryPage(c *gin.Context) (agentQueryPage, bool) {
+	page := 1
+	pageSize := common.ItemsPerPage
+	if value := c.Query("p"); value != "" {
+		parsed, err := strconv.Atoi(value)
+		if err != nil || parsed <= 0 {
+			common.ApiErrorMsg(c, "invalid pagination parameters")
+			return agentQueryPage{}, false
+		}
+		page = parsed
+	}
+	if value := c.Query("page_size"); value != "" {
+		parsed, err := strconv.Atoi(value)
+		if err != nil || parsed <= 0 {
+			common.ApiErrorMsg(c, "invalid pagination parameters")
+			return agentQueryPage{}, false
+		}
+		pageSize = min(parsed, 100)
+	}
+	if page-1 > math.MaxInt/pageSize {
+		common.ApiErrorMsg(c, "invalid pagination parameters")
+		return agentQueryPage{}, false
+	}
+	return agentQueryPage{Page: page, PageSize: pageSize, Offset: (page - 1) * pageSize}, true
+}
+
+func parseAgentOrderQuery(c *gin.Context, page agentQueryPage, allowAgentFilter bool) (service.AgentOrderQuery, bool) {
+	planID, ok := parseAgentOptionalPositiveInt(c, "plan_id")
+	if !ok {
+		return service.AgentOrderQuery{}, false
+	}
+	agentUserID := 0
+	if allowAgentFilter {
+		agentUserID, ok = parseAgentOptionalPositiveInt(c, "agent_user_id")
+		if !ok {
+			return service.AgentOrderQuery{}, false
+		}
+	}
+	startTimestamp, endTimestamp, ok := parseAgentTimeRange(c)
+	if !ok {
+		return service.AgentOrderQuery{}, false
+	}
+	return service.AgentOrderQuery{
+		AgentUserID: agentUserID, PlanID: planID, Status: c.Query("status"),
+		StartTimestamp: startTimestamp, EndTimestamp: endTimestamp,
+		Offset: page.Offset, Limit: page.PageSize,
+	}, true
+}
+
+func parseAgentCodeQuery(c *gin.Context, page agentQueryPage, allowAgentFilter bool) (service.AgentCodeQuery, bool) {
+	planID, ok := parseAgentOptionalPositiveInt(c, "plan_id")
+	if !ok {
+		return service.AgentCodeQuery{}, false
+	}
+	orderID, ok := parseAgentOptionalPositiveInt(c, "order_id")
+	if !ok {
+		return service.AgentCodeQuery{}, false
+	}
+	agentUserID := 0
+	if allowAgentFilter {
+		agentUserID, ok = parseAgentOptionalPositiveInt(c, "agent_user_id")
+		if !ok {
+			return service.AgentCodeQuery{}, false
+		}
+	}
+	startTimestamp, endTimestamp, ok := parseAgentTimeRange(c)
+	if !ok {
+		return service.AgentCodeQuery{}, false
+	}
+	return service.AgentCodeQuery{
+		AgentUserID: agentUserID, PlanID: planID, OrderID: orderID, Status: c.Query("status"),
+		StartTimestamp: startTimestamp, EndTimestamp: endTimestamp,
+		Offset: page.Offset, Limit: page.PageSize,
+	}, true
+}
+
+func parseAgentOptionalPositiveInt(c *gin.Context, name string) (int, bool) {
+	value := c.Query(name)
+	if value == "" {
+		return 0, true
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil || parsed <= 0 {
+		common.ApiErrorMsg(c, "invalid "+name)
+		return 0, false
+	}
+	return parsed, true
+}
+
+func parseAgentTimeRange(c *gin.Context) (int64, int64, bool) {
+	var startTimestamp int64
+	var endTimestamp int64
+	if value := c.Query("start_timestamp"); value != "" {
+		parsed, err := strconv.ParseInt(value, 10, 64)
+		if err != nil || parsed < 0 {
+			common.ApiErrorMsg(c, "invalid start_timestamp")
+			return 0, 0, false
+		}
+		startTimestamp = parsed
+	}
+	if value := c.Query("end_timestamp"); value != "" {
+		parsed, err := strconv.ParseInt(value, 10, 64)
+		if err != nil || parsed < 0 {
+			common.ApiErrorMsg(c, "invalid end_timestamp")
+			return 0, 0, false
+		}
+		endTimestamp = parsed
+	}
+	if endTimestamp != 0 && endTimestamp < startTimestamp {
+		common.ApiErrorMsg(c, "end_timestamp must not be earlier than start_timestamp")
+		return 0, 0, false
+	}
+	return startTimestamp, endTimestamp, true
+}
+
+func writeAgentQueryPage(c *gin.Context, page agentQueryPage, total int64, records any) {
+	common.ApiSuccess(c, gin.H{
+		"page": page.Page, "page_size": page.PageSize,
+		"total": total, "items": records,
+	})
+}
+
 func writeAgentError(c *gin.Context, err error) {
 	switch {
 	case errors.Is(err, service.ErrAgentFeatureDisabled):
@@ -102,6 +312,10 @@ func writeAgentError(c *gin.Context, err error) {
 		common.ApiErrorMsg(c, "idempotency key was already used for a different purchase")
 	case errors.Is(err, service.ErrAgentAccountConflict):
 		common.ApiErrorMsg(c, "agent account changed concurrently; please retry")
+	case errors.Is(err, service.ErrAgentQueryInvalid):
+		common.ApiErrorMsg(c, "invalid agent query parameters")
+	case errors.Is(err, service.ErrAgentExportLimitExceeded):
+		common.ApiErrorMsg(c, "code export exceeds the 10000 row limit")
 	default:
 		common.SysError("agent purchase failed: " + err.Error())
 		common.ApiErrorMsg(c, "agent purchase failed")

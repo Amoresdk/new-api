@@ -60,6 +60,8 @@ func SetApiRouter(router *gin.Engine) {
 			agentAdminReadRoute.GET("/agents", controller.AdminListAgents)
 			agentAdminReadRoute.GET("/agents/:user_id/credit-logs", controller.AdminListAgentCreditLogs)
 			agentAdminReadRoute.GET("/offers", controller.AdminListAgentPlanOffers)
+			agentAdminReadRoute.GET("/orders", controller.AdminListAgentOrders)
+			agentAdminReadRoute.GET("/codes", controller.AdminListAgentCodes)
 		}
 		agentAdminMutationRoute := apiRouter.Group("/agent-admin")
 		agentAdminMutationRoute.Use(middleware.RootAuth())
@@ -75,6 +77,10 @@ func SetApiRouter(router *gin.Engine) {
 		{
 			agentRoute.GET("/overview", controller.GetAgentOverview)
 			agentRoute.GET("/offers", controller.GetAgentOffers)
+			agentRoute.GET("/orders", controller.GetAgentOrders)
+			agentRoute.GET("/codes", controller.GetAgentCodes)
+			agentRoute.GET("/codes/export", controller.ExportAgentCodes)
+			agentRoute.GET("/credit-logs", controller.GetAgentCreditLogs)
 			agentRoute.POST("/orders", middleware.CriticalRateLimit(), controller.CreateAgentOrder)
 		}
 

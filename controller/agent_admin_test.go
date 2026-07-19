@@ -95,3 +95,41 @@ func TestAgentPlanOfferResponseFormatsMoneyAndReturnsCurrentPlan(t *testing.T) {
 	assert.Contains(t, string(raw), `"unit_price":"60.00"`)
 	assert.NotContains(t, string(raw), `"unit_price":6000`)
 }
+
+func TestListAgentQueryParsingCapsPagesAndDoesNotTrustOwnerFilter(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	context, _ := gin.CreateTestContext(recorder)
+	context.Request = httptest.NewRequest("GET", "/api/agent/codes?p=2&page_size=1000&agent_user_id=999&plan_id=7", nil)
+
+	page, ok := parseAgentQueryPage(context)
+	require.True(t, ok)
+	assert.Equal(t, 2, page.Page)
+	assert.Equal(t, 100, page.PageSize)
+	assert.Equal(t, 100, page.Offset)
+	query, ok := parseAgentCodeQuery(context, page, false)
+	require.True(t, ok)
+	assert.Zero(t, query.AgentUserID, "agent identity comes from UserAuth, never query parameters")
+	assert.Equal(t, 7, query.PlanID)
+}
+
+func TestListAgentQueryParsingRejectsUnsafePaginationAndTimeRange(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, target := range []string{
+		"/api/agent/codes?p=0",
+		"/api/agent/codes?page_size=-1",
+		"/api/agent/codes?p=not-a-number",
+	} {
+		recorder := httptest.NewRecorder()
+		context, _ := gin.CreateTestContext(recorder)
+		context.Request = httptest.NewRequest("GET", target, nil)
+		_, ok := parseAgentQueryPage(context)
+		assert.False(t, ok, target)
+	}
+
+	recorder := httptest.NewRecorder()
+	context, _ := gin.CreateTestContext(recorder)
+	context.Request = httptest.NewRequest("GET", "/api/agent/codes?start_timestamp=20&end_timestamp=10", nil)
+	_, _, ok := parseAgentTimeRange(context)
+	assert.False(t, ok)
+}
