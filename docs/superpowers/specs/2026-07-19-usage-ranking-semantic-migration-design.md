@@ -15,7 +15,7 @@
 - 使用实时 SQL 聚合，不新增预聚合表、定时任务或缓存。
 - 排行榜仅超级管理员（Root，角色值 100）可见和访问。
 - 完整保留用户行展开后的分组统计。
-- Classic 尽量还原源项目参考图；Default 保留同一信息结构，但使用当前 Base UI 设计语言。
+- Classic 按目标项目当前 Semi UI、CardPro 和 CardTable 风格重新设计；Default 按当前 Base UI 风格重新设计。两套前端共享功能和数据口径，不要求视觉一致。
 - 技术细节由实现者根据任务目标自主决策，不要求用户逐项确认。
 
 ## 目标
@@ -274,16 +274,18 @@ middleware.RootAuth()
 - `web/classic/src/components/table/usage-logs/ranking/UsageRankingTable.jsx`
 - `web/classic/src/components/table/usage-logs/ranking/usage-ranking-table.css`
 
-源组件可作为主体，但请求返回类型、Root 判断、独立分页存储键和当前页面集成必须按目标分支调整。
+源组件仅作为功能、字段和交互行为参考。Classic 页面按目标分支当前的 Semi UI、CardPro、CardTable、筛选区和弹窗组织方式重新实现；只选择性复用不与当前设计冲突的纯逻辑，不能直接复制源页面样式或用源文件覆盖目标文件。
 
 ### 视觉与交互
 
-- 顶部四张概览卡：总消费额度、总调用次数、总 Tokens、活跃用户数。
-- 筛选项：日期时间范围、模型名称、分组、渠道 ID、排序方式。
+- 使用当前 Classic 日志页已有的 CardPro 页面骨架、CardTable 表格、Semi UI Form/Tabs/Pagination 和主题变量，不复刻源截图的卡片尺寸、边框、间距或固定配色。
+- 顶部四项概览采用 Classic 现有统计卡/信息块语言：总消费额度、总调用次数、总 Tokens、活跃用户数。
+- 筛选区遵循当前日志页的字段密度、栅格断点、按钮层级和折叠方式，包含日期时间范围、模型名称、分组、渠道 ID、排序方式。
 - 查询按钮应用草稿筛选并回到第 1 页；重置恢复默认今天和消费排序。
-- 排名表保留参考图中的前十名分层底色、左侧色条和奖牌标签。
-- 点击用户行展开分组统计表。
-- 宽表在窄屏下允许横向滚动，不遮挡筛选、分页或展开区域。
+- 排名标签、前十名层级和展开按钮使用 Semi UI Tag、Typography、Icon 与 `var(--semi-color-*)` 主题变量重新设计；强调清晰但不引入与现有 Classic 页面割裂的独立视觉系统。
+- 点击用户行展开使用紧凑型 CardTable 展示分组统计，并继承当前表格的表头、行高、空状态和暗色模式。
+- 宽表在窄屏下遵循 Classic 现有横向滚动与分页布局，不遮挡筛选、分页或展开区域。
+- 所有自定义样式限定在排行榜根类名下，不能污染现有日志表或全局 Semi UI 组件。
 - 分页大小使用独立键 `usage-ranking-page-size`，默认 20，可选 10、20、50、100，不污染日志明细的分页偏好。
 
 ## Default 前端设计
@@ -328,7 +330,7 @@ Tab 状态保存在组件本地，默认 `details`。刷新后回到日志明细
 ### 视觉与响应式
 
 - 使用当前项目的 Card、Tabs、Button、Input、Select、日期范围选择器和 DataTable 组件。
-- 桌面端保持与 Classic 相同的信息顺序，但使用 Default 的圆角、颜色变量、暗色主题和表格密度。
+- 桌面端保留相同的数据字段和操作能力，但由 Default 自主确定最符合当前页面的信息顺序、圆角、颜色变量、暗色主题和表格密度，不追求与 Classic 像素级一致。
 - 通过 TanStack Table 的展开状态和 `DataTablePage.renderRow` 渲染用户行与全宽分组明细行。
 - Top 1–3 和 Top 4–10 使用主题感知的轻量背景和左侧强调条，不复制 Semi UI CSS 变量。
 - 移动端使用专用卡片列表，首屏显示排名、用户、消费、调用、Tokens、错误率和最近调用时间；展开后显示其余指标与分组明细。
@@ -485,7 +487,7 @@ bun run build
 - 默认今天、四个筛选项、两种排序、分页和重置均正常。
 - 概览值等于当前筛选范围内消费日志聚合值。
 - 用户排行、错误率、流式占比和分组展开值与测试数据完全一致。
-- Top 1–10 视觉层级明确，Default 使用自身设计语言而非复制 Semi UI 样式。
+- Top 1–10 视觉层级明确；Classic 和 Default 分别使用各自现有设计语言，不复制源项目截图样式，也不跨前端复用视觉组件。
 - SQLite、MySQL、PostgreSQL 和 ClickHouse 路径不包含已知不兼容 SQL。
 - 不回归现有日志明细页功能。
 - 后端测试、Default 类型检查/代码检查/构建以及 Classic 代码检查/构建全部通过。
