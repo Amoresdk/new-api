@@ -63,7 +63,7 @@ function AgentRouteGate() {
   const userID = useAuthStore((state) => state.auth.user?.id ?? 0)
   const gateState = getAgentRouteGateState({
     statusEnabled: status.status?.agent_enabled === true,
-    statusPlaceholder: status.isPlaceholderData,
+    statusAuthoritative: status.hasAuthoritativeData,
     statusPending: status.loading || status.isFetching,
     statusError: status.isError,
     accessPending: access.isChecking,

@@ -56,16 +56,35 @@ export async function resolveAgentAccess(
   }
 }
 
+type AgentStatusAccessInput = {
+  hasStatusData: boolean
+  isPlaceholderData: boolean
+  isFetching: boolean
+  isError: boolean
+  agentEnabled: boolean
+}
+
+export function getAgentStatusAccessState(input: AgentStatusAccessInput): {
+  isAuthoritative: boolean
+  globallyEnabled: boolean
+} {
+  const isAuthoritative = input.hasStatusData && !input.isPlaceholderData
+  return {
+    isAuthoritative,
+    globallyEnabled: isAuthoritative && input.agentEnabled,
+  }
+}
+
 export function useAgentAccess() {
   const userID = useAuthStore((state) => state.auth.user?.id)
   const statusQuery = useStatus()
-  const statusIsAuthoritative =
-    !statusQuery.loading &&
-    !statusQuery.isFetching &&
-    !statusQuery.isPlaceholderData &&
-    !statusQuery.isError
-  const globallyEnabled =
-    statusIsAuthoritative && statusQuery.status?.agent_enabled === true
+  const { globallyEnabled } = getAgentStatusAccessState({
+    hasStatusData: statusQuery.status !== null,
+    isPlaceholderData: statusQuery.isPlaceholderData,
+    isFetching: statusQuery.isFetching,
+    isError: statusQuery.isError,
+    agentEnabled: statusQuery.status?.agent_enabled === true,
+  })
   const shouldCheck = userID !== undefined && globallyEnabled
 
   const query = useQuery({

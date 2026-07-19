@@ -86,8 +86,8 @@ describe('agent route gate', () => {
     assert.equal(
       getAgentRouteGateState({
         statusEnabled: false,
-        statusPlaceholder: true,
-        statusPending: false,
+        statusAuthoritative: false,
+        statusPending: true,
         statusError: false,
         accessPending: false,
         accessDenied: false,
@@ -99,7 +99,7 @@ describe('agent route gate', () => {
     assert.equal(
       getAgentRouteGateState({
         statusEnabled: true,
-        statusPlaceholder: false,
+        statusAuthoritative: true,
         statusPending: false,
         statusError: false,
         accessPending: false,
@@ -111,10 +111,31 @@ describe('agent route gate', () => {
     )
   })
 
-  test('separates status/access failures from confirmed denials', () => {
+  test('keeps authoritative status and access data ready during background refresh', () => {
+    const ready = {
+      statusEnabled: true,
+      statusAuthoritative: true,
+      statusPending: false,
+      statusError: false,
+      accessPending: false,
+      accessDenied: false,
+      accessError: false,
+      accessReady: true,
+    }
+    assert.equal(
+      getAgentRouteGateState({ ...ready, statusPending: true }),
+      'ready'
+    )
+    assert.equal(
+      getAgentRouteGateState({ ...ready, accessError: true }),
+      'ready'
+    )
+  })
+
+  test('denies refreshed disabled or null access but errors on initial failures', () => {
     const base = {
       statusEnabled: true,
-      statusPlaceholder: false,
+      statusAuthoritative: true,
       statusPending: false,
       statusError: false,
       accessPending: false,
@@ -123,7 +144,11 @@ describe('agent route gate', () => {
       accessReady: false,
     }
     assert.equal(
-      getAgentRouteGateState({ ...base, statusError: true }),
+      getAgentRouteGateState({
+        ...base,
+        statusAuthoritative: false,
+        statusError: true,
+      }),
       'error'
     )
     assert.equal(

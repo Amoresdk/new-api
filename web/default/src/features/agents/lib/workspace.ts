@@ -81,7 +81,7 @@ export type AgentWorkspaceSearch = z.infer<typeof agentWorkspaceSearchSchema>
 
 type AgentRouteGateInput = {
   statusEnabled: boolean
-  statusPlaceholder: boolean
+  statusAuthoritative: boolean
   statusPending: boolean
   statusError: boolean
   accessPending: boolean
@@ -95,13 +95,16 @@ export type AgentRouteGateState = 'loading' | 'error' | 'denied' | 'ready'
 export function getAgentRouteGateState(
   input: AgentRouteGateInput
 ): AgentRouteGateState {
-  if (input.statusError) return 'error'
-  if (input.statusPending || input.statusPlaceholder) return 'loading'
+  if (!input.statusAuthoritative) {
+    if (input.statusError) return 'error'
+    if (input.statusPending) return 'loading'
+    return 'error'
+  }
   if (!input.statusEnabled) return 'denied'
+  if (input.accessReady) return 'ready'
+  if (input.accessDenied) return 'denied'
   if (input.accessError) return 'error'
   if (input.accessPending) return 'loading'
-  if (input.accessDenied) return 'denied'
-  if (input.accessReady) return 'ready'
   return 'loading'
 }
 

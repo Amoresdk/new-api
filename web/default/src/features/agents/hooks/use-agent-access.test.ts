@@ -21,9 +21,53 @@ import { describe, test } from 'node:test'
 
 import { AxiosError, type InternalAxiosRequestConfig } from 'axios'
 
-import { resolveAgentAccess } from './use-agent-access'
+import {
+  getAgentStatusAccessState,
+  resolveAgentAccess,
+} from './use-agent-access'
 
 describe('agent access resolution', () => {
+  test('keeps authoritative enabled status during background fetch and refetch error', () => {
+    const base = {
+      hasStatusData: true,
+      isPlaceholderData: false,
+      isFetching: false,
+      isError: false,
+      agentEnabled: true,
+    }
+    assert.deepEqual(getAgentStatusAccessState({ ...base, isFetching: true }), {
+      isAuthoritative: true,
+      globallyEnabled: true,
+    })
+    assert.deepEqual(getAgentStatusAccessState({ ...base, isError: true }), {
+      isAuthoritative: true,
+      globallyEnabled: true,
+    })
+  })
+
+  test('does not treat placeholder or missing error status as authoritative', () => {
+    assert.deepEqual(
+      getAgentStatusAccessState({
+        hasStatusData: true,
+        isPlaceholderData: true,
+        isFetching: true,
+        isError: false,
+        agentEnabled: true,
+      }),
+      { isAuthoritative: false, globallyEnabled: false }
+    )
+    assert.deepEqual(
+      getAgentStatusAccessState({
+        hasStatusData: false,
+        isPlaceholderData: false,
+        isFetching: false,
+        isError: true,
+        agentEnabled: false,
+      }),
+      { isAuthoritative: false, globallyEnabled: false }
+    )
+  })
+
   test('maps only explicit business denials to no access', async () => {
     for (const message of [
       'agent workspace is disabled',

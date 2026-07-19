@@ -76,6 +76,10 @@ export function useStatus() {
 
   return {
     status: query.data ?? null,
+    hasAuthoritativeData:
+      query.data !== undefined &&
+      query.data !== null &&
+      !query.isPlaceholderData,
     loading: query.isLoading,
     isFetching: query.isFetching,
     isPlaceholderData: query.isPlaceholderData,
