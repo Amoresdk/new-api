@@ -175,7 +175,7 @@ git commit -m "feat: add usage ranking aggregation"
 
 - [ ] **Step 1: Add strict request parsing and response mapping**
 
-Add `GetUsageRanking(c *gin.Context)` to `controller/log.go`. Defaults are local-day start through current time plus one hour, page 1, page size 20, and `sort_by=quota`; maximum page size is 100. Reject malformed numbers, negative channel IDs/timestamps, end before start, and unsupported sort values with HTTP 400 and this shape:
+Add `GetUsageRanking(c *gin.Context)` to `controller/log.go`. Defaults are local-day start through current time plus one hour, page 1, page size 20, and `sort_by=quota`; maximum page size is 100. Reject malformed timestamps/channel IDs, negative channel IDs/timestamps, and end before start with HTTP 400. Normalize invalid sort values to `quota` and invalid pagination to its documented defaults. Invalid requests use this shape:
 
 ```go
 c.JSON(http.StatusBadRequest, gin.H{
