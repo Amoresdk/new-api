@@ -1,0 +1,36 @@
+.usage-ranking-root {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.usage-ranking-root .usage-ranking-summary .semi-card {
+  background: var(--semi-color-bg-1);
+  border-color: var(--semi-color-border);
+}
+
+.usage-ranking-root .usage-ranking-table .semi-table-row-cell {
+  vertical-align: middle;
+}
+
+.usage-ranking-root .usage-ranking-group-stats {
+  padding: 8px;
+  overflow-x: auto;
+  border: 1px solid var(--semi-color-border);
+  border-radius: 12px;
+  background: var(--semi-color-fill-0);
+}
+
+.usage-ranking-root .usage-ranking-group-stats .semi-table-wrapper {
+  min-width: 720px;
+}
+
+@media (max-width: 767px) {
+  .usage-ranking-root .usage-ranking-group-stats {
+    padding: 4px;
+  }
+
+  .usage-ranking-root .usage-ranking-group-stats .semi-card {
+    box-shadow: none;
+  }
+}

@@ -17,7 +17,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 
-import React from 'react';
+import React, { useState } from 'react';
+import { TabPane, Tabs } from '@douyinfe/semi-ui';
 import CardPro from '../../common/ui/CardPro';
 import LogsTable from './UsageLogsTable';
 import LogsActions from './UsageLogsActions';
@@ -29,10 +30,33 @@ import ParamOverrideModal from './modals/ParamOverrideModal';
 import { useLogsData } from '../../../hooks/usage-logs/useUsageLogsData';
 import { useIsMobile } from '../../../hooks/common/useIsMobile';
 import { createCardProPagination } from '../../../helpers/utils';
+import { isRoot } from '../../../helpers';
+import UsageRankingTab from './ranking/UsageRankingTab';
 
 const LogsPage = () => {
   const logsData = useLogsData();
   const isMobile = useIsMobile();
+  const [activeTab, setActiveTab] = useState('details');
+
+  const logsContent = (
+    <CardPro
+      type='type2'
+      statsArea={<LogsActions {...logsData} />}
+      searchArea={<LogsFilters {...logsData} />}
+      paginationArea={createCardProPagination({
+        currentPage: logsData.activePage,
+        pageSize: logsData.pageSize,
+        total: logsData.logCount,
+        onPageChange: logsData.handlePageChange,
+        onPageSizeChange: logsData.handlePageSizeChange,
+        isMobile: isMobile,
+        t: logsData.t,
+      })}
+      t={logsData.t}
+    >
+      <LogsTable {...logsData} />
+    </CardPro>
+  );
 
   return (
     <>
@@ -43,23 +67,18 @@ const LogsPage = () => {
       <ParamOverrideModal {...logsData} />
 
       {/* Main Content */}
-      <CardPro
-        type='type2'
-        statsArea={<LogsActions {...logsData} />}
-        searchArea={<LogsFilters {...logsData} />}
-        paginationArea={createCardProPagination({
-          currentPage: logsData.activePage,
-          pageSize: logsData.pageSize,
-          total: logsData.logCount,
-          onPageChange: logsData.handlePageChange,
-          onPageSizeChange: logsData.handlePageSizeChange,
-          isMobile: isMobile,
-          t: logsData.t,
-        })}
-        t={logsData.t}
-      >
-        <LogsTable {...logsData} />
-      </CardPro>
+      {isRoot() ? (
+        <Tabs type='line' activeKey={activeTab} onChange={setActiveTab} keepDOM>
+          <TabPane tab={logsData.t('日志明细')} itemKey='details'>
+            {logsContent}
+          </TabPane>
+          <TabPane tab={logsData.t('排行榜')} itemKey='ranking'>
+            <UsageRankingTab active={activeTab === 'ranking'} />
+          </TabPane>
+        </Tabs>
+      ) : (
+        logsContent
+      )}
     </>
   );
 };
