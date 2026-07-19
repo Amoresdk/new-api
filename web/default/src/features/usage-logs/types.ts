@@ -331,6 +331,84 @@ export interface GetLogStatsResponse {
 }
 
 // ============================================================================
+// Usage Ranking Types
+// ============================================================================
+
+export interface UsageRankingParams {
+  start_timestamp?: number
+  end_timestamp?: number
+  model_name?: string
+  channel?: number
+  group?: string
+  sort_by?: 'quota' | 'request_count'
+  p?: number
+  page_size?: number
+}
+
+export interface UsageRankingGroupStat {
+  group: string
+  quota: number
+  request_count: number
+  prompt_tokens: number
+  completion_tokens: number
+  total_tokens: number
+  avg_use_time: number
+  stream_count: number
+  stream_ratio: number
+  error_count: number
+  error_rate: number
+  model_count: number
+  token_count: number
+  channel_count: number
+  last_used_at: number
+}
+
+export interface UsageRankingItem {
+  rank: number
+  user_id: number
+  username: string
+  quota: number
+  request_count: number
+  prompt_tokens: number
+  completion_tokens: number
+  total_tokens: number
+  avg_use_time: number
+  stream_count: number
+  stream_ratio: number
+  error_count: number
+  error_rate: number
+  model_count: number
+  token_count: number
+  group_count: number
+  channel_count: number
+  last_used_at: number
+  group_stats: UsageRankingGroupStat[]
+}
+
+export interface UsageRankingSummary {
+  quota: number
+  request_count: number
+  prompt_tokens: number
+  completion_tokens: number
+  total_tokens: number
+  active_user_count: number
+}
+
+export interface UsageRankingData {
+  items: UsageRankingItem[]
+  total: number
+  page: number
+  page_size: number
+  summary: UsageRankingSummary
+}
+
+export interface GetUsageRankingResponse {
+  success: boolean
+  message?: string
+  data?: UsageRankingData
+}
+
+// ============================================================================
 // Drawing Log Types
 // ============================================================================
 
