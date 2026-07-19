@@ -34,6 +34,7 @@ var auditContentTemplates = map[string]string{
 	"agent.limit_update":    "Updated agent ${agent_user_id} daily code limit to ${daily_code_limit}",
 	"agent.credit":          "Credited agent ${agent_user_id} by ${amount} points",
 	"agent.debit":           "Debited agent ${agent_user_id} by ${amount} points",
+	"agent.offer_update":    "Updated agent offer for plan ${plan_id}: enabled=${enabled}, price=${unit_price}, validity=${code_valid_days} days, refund fee=${refund_fee_bps} bps",
 
 	"channel.create":             "Created channel ${name} (type ${type}, count ${count})",
 	"channel.update":             "Updated channel ${name} (ID: ${id})",

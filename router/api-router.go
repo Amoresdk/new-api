@@ -59,6 +59,7 @@ func SetApiRouter(router *gin.Engine) {
 		{
 			agentAdminReadRoute.GET("/agents", controller.AdminListAgents)
 			agentAdminReadRoute.GET("/agents/:user_id/credit-logs", controller.AdminListAgentCreditLogs)
+			agentAdminReadRoute.GET("/offers", controller.AdminListAgentPlanOffers)
 		}
 		agentAdminMutationRoute := apiRouter.Group("/agent-admin")
 		agentAdminMutationRoute.Use(middleware.RootAuth())
@@ -67,6 +68,7 @@ func SetApiRouter(router *gin.Engine) {
 			agentAdminMutationRoute.POST("/agents/:user_id/disable", controller.RootDisableAgent)
 			agentAdminMutationRoute.PATCH("/agents/:user_id/limit", controller.RootUpdateAgentDailyLimit)
 			agentAdminMutationRoute.POST("/agents/:user_id/credit-adjustments", controller.RootAdjustAgentCredit)
+			agentAdminMutationRoute.PUT("/offers/:plan_id", controller.RootUpsertAgentPlanOffer)
 		}
 
 		apiRouter.POST("/stripe/webhook", anonymousRequestBodyLimit, controller.StripeWebhook)

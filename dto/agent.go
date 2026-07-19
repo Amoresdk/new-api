@@ -49,3 +49,50 @@ type AgentCreditAdjustmentResponse struct {
 type AgentCreditBalanceResponse struct {
 	Balance string `json:"balance"`
 }
+
+type AgentPlanOfferUpsertRequest struct {
+	Enabled       *bool  `json:"enabled"`
+	UnitPrice     string `json:"unit_price"`
+	CodeValidDays *int   `json:"code_valid_days"`
+	RefundFeeBps  int    `json:"refund_fee_bps"`
+}
+
+type AgentPlanOfferResponse struct {
+	Id            int                           `json:"id"`
+	PlanId        int                           `json:"plan_id"`
+	Enabled       bool                          `json:"enabled"`
+	UnitPrice     string                        `json:"unit_price"`
+	CodeValidDays int                           `json:"code_valid_days"`
+	RefundFeeBps  int                           `json:"refund_fee_bps"`
+	Plan          AgentSubscriptionPlanResponse `json:"plan"`
+	CreatedAt     int64                         `json:"created_at"`
+	UpdatedAt     int64                         `json:"updated_at"`
+}
+
+// AgentSubscriptionPlanResponse is the current plan catalog entry paired with
+// an agent offer. Purchase-time entitlements are snapshotted separately.
+type AgentSubscriptionPlanResponse struct {
+	Id                      int     `json:"id"`
+	Title                   string  `json:"title"`
+	Subtitle                string  `json:"subtitle"`
+	PriceAmount             float64 `json:"price_amount"`
+	Currency                string  `json:"currency"`
+	DurationUnit            string  `json:"duration_unit"`
+	DurationValue           int     `json:"duration_value"`
+	CustomSeconds           int64   `json:"custom_seconds"`
+	Enabled                 bool    `json:"enabled"`
+	SortOrder               int     `json:"sort_order"`
+	AllowBalancePay         *bool   `json:"allow_balance_pay"`
+	AllowWalletOverflow     *bool   `json:"allow_wallet_overflow"`
+	StripePriceId           string  `json:"stripe_price_id"`
+	CreemProductId          string  `json:"creem_product_id"`
+	WaffoPancakeProductId   string  `json:"waffo_pancake_product_id"`
+	MaxPurchasePerUser      int     `json:"max_purchase_per_user"`
+	UpgradeGroup            string  `json:"upgrade_group"`
+	DowngradeGroup          string  `json:"downgrade_group"`
+	TotalAmount             int64   `json:"total_amount"`
+	QuotaResetPeriod        string  `json:"quota_reset_period"`
+	QuotaResetCustomSeconds int64   `json:"quota_reset_custom_seconds"`
+	CreatedAt               int64   `json:"created_at"`
+	UpdatedAt               int64   `json:"updated_at"`
+}

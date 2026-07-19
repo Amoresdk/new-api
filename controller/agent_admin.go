@@ -53,6 +53,19 @@ func AdminListAgentCreditLogs(c *gin.Context) {
 	common.ApiSuccess(c, pageInfo)
 }
 
+func AdminListAgentPlanOffers(c *gin.Context) {
+	records, err := service.ListAgentPlanOffers()
+	if err != nil {
+		writeAgentAdminError(c, err)
+		return
+	}
+	items := make([]dto.AgentPlanOfferResponse, 0, len(records))
+	for _, record := range records {
+		items = append(items, agentPlanOfferResponse(record))
+	}
+	common.ApiSuccess(c, items)
+}
+
 func RootEnableAgent(c *gin.Context) {
 	userID, err := agentAdminUserID(c)
 	if err != nil {
@@ -154,6 +167,48 @@ func RootAdjustAgentCredit(c *gin.Context) {
 	})
 }
 
+func RootUpsertAgentPlanOffer(c *gin.Context) {
+	planID, err := strconv.Atoi(c.Param("plan_id"))
+	if err != nil || planID <= 0 {
+		common.ApiErrorMsg(c, "invalid subscription plan ID")
+		return
+	}
+	var request dto.AgentPlanOfferUpsertRequest
+	if err := c.ShouldBindJSON(&request); err != nil || request.Enabled == nil {
+		common.ApiErrorMsg(c, "enabled and offer terms are required")
+		return
+	}
+	unitPrice, err := service.ParseAgentPoints(request.UnitPrice)
+	if err != nil || unitPrice <= 0 {
+		common.ApiErrorMsg(c, "unit price must be a positive value with at most two decimal places")
+		return
+	}
+	offer, err := service.UpsertAgentPlanOffer(service.AgentPlanOfferInput{
+		PlanID: planID, Enabled: *request.Enabled, UnitPrice: unitPrice,
+		CodeValidDays: request.CodeValidDays, RefundFeeBps: request.RefundFeeBps,
+	})
+	if err != nil {
+		writeAgentAdminError(c, err)
+		return
+	}
+	plan, err := model.GetSubscriptionPlanById(planID)
+	if err != nil {
+		writeAgentAdminError(c, err)
+		return
+	}
+	recordManageAudit(c, "agent.offer_update", map[string]interface{}{
+		"plan_id":         planID,
+		"enabled":         offer.Enabled,
+		"unit_price":      service.FormatAgentPoints(offer.UnitPrice),
+		"code_valid_days": offer.CodeValidDays,
+		"refund_fee_bps":  offer.RefundFeeBps,
+	})
+	common.ApiSuccess(c, agentPlanOfferResponse(service.AgentPlanOfferRecord{
+		Offer: *offer,
+		Plan:  *plan,
+	}))
+}
+
 func agentAdminUserID(c *gin.Context) (int, error) {
 	userID, err := strconv.Atoi(c.Param("user_id"))
 	if err != nil || userID <= 0 {
@@ -196,6 +251,46 @@ func agentCreditLogResponse(log model.AgentCreditLog) dto.AgentCreditLogResponse
 	}
 }
 
+func agentPlanOfferResponse(record service.AgentPlanOfferRecord) dto.AgentPlanOfferResponse {
+	offer := record.Offer
+	plan := record.Plan
+	return dto.AgentPlanOfferResponse{
+		Id:            offer.Id,
+		PlanId:        offer.PlanId,
+		Enabled:       offer.Enabled,
+		UnitPrice:     service.FormatAgentPoints(offer.UnitPrice),
+		CodeValidDays: offer.CodeValidDays,
+		RefundFeeBps:  offer.RefundFeeBps,
+		Plan: dto.AgentSubscriptionPlanResponse{
+			Id:                      plan.Id,
+			Title:                   plan.Title,
+			Subtitle:                plan.Subtitle,
+			PriceAmount:             plan.PriceAmount,
+			Currency:                plan.Currency,
+			DurationUnit:            plan.DurationUnit,
+			DurationValue:           plan.DurationValue,
+			CustomSeconds:           plan.CustomSeconds,
+			Enabled:                 plan.Enabled,
+			SortOrder:               plan.SortOrder,
+			AllowBalancePay:         plan.AllowBalancePay,
+			AllowWalletOverflow:     plan.AllowWalletOverflow,
+			StripePriceId:           plan.StripePriceId,
+			CreemProductId:          plan.CreemProductId,
+			WaffoPancakeProductId:   plan.WaffoPancakeProductId,
+			MaxPurchasePerUser:      plan.MaxPurchasePerUser,
+			UpgradeGroup:            plan.UpgradeGroup,
+			DowngradeGroup:          plan.DowngradeGroup,
+			TotalAmount:             plan.TotalAmount,
+			QuotaResetPeriod:        plan.QuotaResetPeriod,
+			QuotaResetCustomSeconds: plan.QuotaResetCustomSeconds,
+			CreatedAt:               plan.CreatedAt,
+			UpdatedAt:               plan.UpdatedAt,
+		},
+		CreatedAt: offer.CreatedAt,
+		UpdatedAt: offer.UpdatedAt,
+	}
+}
+
 func writeAgentAdminError(c *gin.Context, err error) {
 	switch {
 	case errors.Is(err, service.ErrAgentAccountNotFound), errors.Is(err, service.ErrAgentUserNotFound):
@@ -214,6 +309,14 @@ func writeAgentAdminError(c *gin.Context, err error) {
 		common.ApiErrorMsg(c, "agent account changed concurrently; please retry")
 	case errors.Is(err, service.ErrAgentBalanceOverflow):
 		common.ApiErrorMsg(c, "agent balance is outside the supported range")
+	case errors.Is(err, service.ErrAgentPlanNotFound):
+		common.ApiErrorMsg(c, "subscription plan not found")
+	case errors.Is(err, service.ErrAgentOfferInvalidPrice):
+		common.ApiErrorMsg(c, "agent offer unit price must be positive")
+	case errors.Is(err, service.ErrAgentOfferInvalidValidity):
+		common.ApiErrorMsg(c, "code validity must be between 1 and 3650 days")
+	case errors.Is(err, service.ErrAgentOfferInvalidRefundFee):
+		common.ApiErrorMsg(c, "refund fee must be between 0 and 10000 basis points")
 	default:
 		common.SysError("agent administration failed: " + err.Error())
 		common.ApiErrorMsg(c, "agent account operation failed")

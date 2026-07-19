@@ -30,3 +30,22 @@ func TestAgentMoneyResponsesUseFixedDecimalStrings(t *testing.T) {
 	assert.NotContains(t, encoded, `"version"`)
 	assert.NotContains(t, encoded, `"daily_code_limit"`)
 }
+
+func TestAgentPlanOfferDTOUsesDecimalStringAndPreservesValidityPresence(t *testing.T) {
+	var omitted AgentPlanOfferUpsertRequest
+	require.NoError(t, common.Unmarshal([]byte(`{"enabled":true,"unit_price":"60.00","refund_fee_bps":500}`), &omitted))
+	assert.Equal(t, "60.00", omitted.UnitPrice)
+	assert.Nil(t, omitted.CodeValidDays)
+
+	var explicitZero AgentPlanOfferUpsertRequest
+	require.NoError(t, common.Unmarshal([]byte(`{"enabled":true,"unit_price":"60.00","code_valid_days":0,"refund_fee_bps":500}`), &explicitZero))
+	if assert.NotNil(t, explicitZero.CodeValidDays) {
+		assert.Zero(t, *explicitZero.CodeValidDays)
+	}
+
+	response := AgentPlanOfferResponse{UnitPrice: "60.00"}
+	raw, err := common.Marshal(response)
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), `"unit_price":"60.00"`)
+	assert.NotContains(t, string(raw), `"unit_price":6000`)
+}
