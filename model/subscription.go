@@ -656,14 +656,29 @@ func CreateUserSubscriptionFromEntitlementTx(tx *gorm.DB, userId int, snapshot S
 	if userId <= 0 {
 		return nil, errors.New("invalid user id")
 	}
+	// Serialize every entitlement delivery for one user with a real write.
+	// SELECT FOR UPDATE alone is not portable to SQLite, while a self-assignment
+	// update takes the user row/write lock on every supported database. MySQL may
+	// report zero affected rows for this no-op, so existence is established by
+	// the independent current read below rather than RowsAffected.
+	if err := tx.Model(&User{}).Where("id = ?", userId).
+		UpdateColumn("id", gorm.Expr("id")).Error; err != nil {
+		return nil, err
+	}
+	var entitlementUser User
+	if err := lockForUpdate(tx).First(&entitlementUser, userId).Error; err != nil {
+		return nil, err
+	}
 	if snapshot.MaxPurchasePerUser > 0 {
-		var count int64
-		if err := tx.Model(&UserSubscription{}).
+		var existingSubscriptions []UserSubscription
+		if err := lockForUpdate(tx).Model(&UserSubscription{}).
+			Select("id").
 			Where("user_id = ? AND plan_id = ?", userId, snapshot.PlanId).
-			Count(&count).Error; err != nil {
+			Limit(snapshot.MaxPurchasePerUser).
+			Find(&existingSubscriptions).Error; err != nil {
 			return nil, err
 		}
-		if count >= int64(snapshot.MaxPurchasePerUser) {
+		if len(existingSubscriptions) >= snapshot.MaxPurchasePerUser {
 			return nil, errors.New("已达到该套餐购买上限")
 		}
 	}
@@ -695,10 +710,7 @@ func CreateUserSubscriptionFromEntitlementTx(tx *gorm.DB, userId int, snapshot S
 	upgradeGroup := strings.TrimSpace(plan.UpgradeGroup)
 	prevGroup := ""
 	if upgradeGroup != "" {
-		currentGroup, err := getUserGroupByIdTx(tx, userId)
-		if err != nil {
-			return nil, err
-		}
+		currentGroup := entitlementUser.Group
 		if currentGroup != upgradeGroup {
 			prevGroup = currentGroup
 			if err := tx.Model(&User{}).Where("id = ?", userId).

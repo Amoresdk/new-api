@@ -18,7 +18,7 @@ var ErrRedeemCodeFailed = errors.New("redemption failed")
 
 type RedemptionResult struct {
 	Type           string `json:"type"`
-	Quota          int    `json:"quota,omitempty"`
+	Quota          *int   `json:"quota,omitempty"`
 	SubscriptionID int    `json:"subscription_id,omitempty"`
 	PlanTitle      string `json:"plan_title,omitempty"`
 	EndTime        int64  `json:"end_time,omitempty"`
@@ -47,7 +47,7 @@ func RedeemCode(userID int, key string) (*RedemptionResult, error) {
 		if err != nil {
 			return nil, redeemCodeError(err)
 		}
-		return &RedemptionResult{Type: RedemptionResultTypeQuota, Quota: quota}, nil
+		return &RedemptionResult{Type: RedemptionResultTypeQuota, Quota: &quota}, nil
 	case common.RedemptionCodeTypeSubscription:
 		return redeemSubscriptionCode(userID, key)
 	default:

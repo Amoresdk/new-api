@@ -37,6 +37,8 @@ func setupRedemptionServiceTest(t *testing.T) {
 		&model.Log{},
 		&model.SubscriptionPlan{},
 		&model.UserSubscription{},
+		&model.AgentAccount{},
+		&model.AgentPlanOffer{},
 		&model.AgentPurchaseOrder{},
 		&model.Redemption{},
 	))
@@ -109,7 +111,8 @@ func TestRedeemCodeQuotaCreditsExactlyOnce(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	assert.Equal(t, RedemptionResultTypeQuota, result.Type)
-	assert.Equal(t, 500, result.Quota)
+	require.NotNil(t, result.Quota)
+	assert.Equal(t, 500, *result.Quota)
 	assert.Zero(t, result.SubscriptionID)
 
 	_, err = RedeemCode(user.Id, code.Key)
@@ -119,6 +122,24 @@ func TestRedeemCodeQuotaCreditsExactlyOnce(t *testing.T) {
 	var reloaded model.User
 	require.NoError(t, model.DB.First(&reloaded, user.Id).Error)
 	assert.Equal(t, 500, reloaded.Quota)
+}
+
+func TestRedeemCodeQuotaZeroResultIncludesQuotaField(t *testing.T) {
+	setupRedemptionServiceTest(t)
+	user := createRedemptionUser(t, 7003, "starter")
+	code := model.Redemption{
+		Key: "41000000000000000000000000000002", Name: "zero-quota-code",
+		Status: common.RedemptionCodeStatusEnabled, Type: common.RedemptionCodeTypeQuota, Quota: 1,
+		CreatedTime: common.GetTimestamp(),
+	}
+	require.NoError(t, model.DB.Create(&code).Error)
+	require.NoError(t, model.DB.Model(&code).UpdateColumn("quota", 0).Error)
+
+	result, err := RedeemCode(user.Id, code.Key)
+	require.NoError(t, err)
+	raw, err := common.Marshal(result)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"type":"quota","quota":0}`, string(raw))
 }
 
 func TestRedeemCodeSubscriptionUsesSoldSnapshotAfterPlanChanges(t *testing.T) {
@@ -136,6 +157,12 @@ func TestRedeemCodeSubscriptionUsesSoldSnapshotAfterPlanChanges(t *testing.T) {
 		UpgradeGroup: "enterprise", AllowWalletOverflow: common.GetPointer(true),
 	}
 	require.NoError(t, model.DB.Create(&currentPlan).Error)
+	require.NoError(t, model.DB.Create(&model.AgentAccount{
+		UserId: 8001, Status: model.AgentAccountStatusDisabled,
+	}).Error)
+	require.NoError(t, model.DB.Create(&model.AgentPlanOffer{
+		PlanId: snapshot.PlanId, Enabled: false, UnitPrice: 1, CodeValidDays: 1,
+	}).Error)
 	_, code := createSubscriptionRedemption(t, "42000000000000000000000000000001", raw, common.RedemptionCodeStatusEnabled, common.GetTimestamp()+3600)
 
 	result, err := RedeemCode(user.Id, code.Key)
@@ -318,4 +345,123 @@ func TestRedeemCodeSubscriptionConcurrentSingleSuccess(t *testing.T) {
 	var logCount int64
 	require.NoError(t, model.DB.Model(&model.Log{}).Where("user_id = ?", user.Id).Count(&logCount).Error)
 	assert.Equal(t, int64(1), logCount)
+}
+
+func TestRedeemCodeConcurrentDifferentCodesRespectSnapshotPurchaseLimit(t *testing.T) {
+	setupRedemptionServiceTest(t)
+	user := createRedemptionUser(t, 7401, "starter")
+	snapshot := validRedemptionSnapshot(9001)
+	snapshot.MaxPurchasePerUser = 1
+	raw, err := model.EncodeSubscriptionEntitlementSnapshot(snapshot)
+	require.NoError(t, err)
+	_, firstCode := createSubscriptionRedemption(t, "46000000000000000000000000000001", raw, common.RedemptionCodeStatusEnabled, common.GetTimestamp()+3600)
+	_, secondCode := createSubscriptionRedemption(t, "46000000000000000000000000000002", raw, common.RedemptionCodeStatusEnabled, common.GetTimestamp()+3600)
+	codes := []model.Redemption{firstCode, secondCode}
+
+	results := make([]*RedemptionResult, len(codes))
+	errs := make([]error, len(codes))
+	start := make(chan struct{})
+	var ready sync.WaitGroup
+	var done sync.WaitGroup
+	ready.Add(len(codes))
+	done.Add(len(codes))
+	for index := range codes {
+		go func(index int) {
+			defer done.Done()
+			ready.Done()
+			<-start
+			results[index], errs[index] = RedeemCode(user.Id, codes[index].Key)
+		}(index)
+	}
+	ready.Wait()
+	close(start)
+	done.Wait()
+
+	successes := 0
+	for index, redeemErr := range errs {
+		var stored model.Redemption
+		require.NoError(t, model.DB.First(&stored, codes[index].Id).Error)
+		if redeemErr == nil {
+			successes++
+			require.NotNil(t, results[index])
+			assert.Equal(t, common.RedemptionCodeStatusUsed, stored.Status)
+			continue
+		}
+		assert.ErrorIs(t, redeemErr, ErrRedeemCodeFailed)
+		assert.Equal(t, common.RedemptionCodeStatusEnabled, stored.Status)
+		assert.Zero(t, stored.UsedUserId)
+	}
+	assert.Equal(t, 1, successes)
+	var subscriptions int64
+	require.NoError(t, model.DB.Model(&model.UserSubscription{}).Where("user_id = ?", user.Id).Count(&subscriptions).Error)
+	assert.Equal(t, int64(1), subscriptions)
+	var logs int64
+	require.NoError(t, model.DB.Model(&model.Log{}).Where("user_id = ?", user.Id).Count(&logs).Error)
+	assert.Equal(t, int64(1), logs)
+}
+
+func TestRedeemCodeConcurrentGroupUpgradesFollowASerialOrder(t *testing.T) {
+	setupRedemptionServiceTest(t)
+	user := createRedemptionUser(t, 7501, "starter")
+	firstSnapshot := validRedemptionSnapshot(9001)
+	firstSnapshot.UpgradeGroup = "pro"
+	secondSnapshot := validRedemptionSnapshot(9001)
+	secondSnapshot.UpgradeGroup = "enterprise"
+	firstRaw, err := model.EncodeSubscriptionEntitlementSnapshot(firstSnapshot)
+	require.NoError(t, err)
+	secondRaw, err := model.EncodeSubscriptionEntitlementSnapshot(secondSnapshot)
+	require.NoError(t, err)
+	_, firstCode := createSubscriptionRedemption(t, "47000000000000000000000000000001", firstRaw, common.RedemptionCodeStatusEnabled, common.GetTimestamp()+3600)
+	_, secondCode := createSubscriptionRedemption(t, "47000000000000000000000000000002", secondRaw, common.RedemptionCodeStatusEnabled, common.GetTimestamp()+3600)
+	codes := []model.Redemption{firstCode, secondCode}
+
+	errs := make([]error, len(codes))
+	start := make(chan struct{})
+	var ready sync.WaitGroup
+	var done sync.WaitGroup
+	ready.Add(len(codes))
+	done.Add(len(codes))
+	for index := range codes {
+		go func(index int) {
+			defer done.Done()
+			ready.Done()
+			<-start
+			_, errs[index] = RedeemCode(user.Id, codes[index].Key)
+		}(index)
+	}
+	ready.Wait()
+	close(start)
+	done.Wait()
+	for _, redeemErr := range errs {
+		require.NoError(t, redeemErr)
+	}
+
+	var subscriptions []model.UserSubscription
+	require.NoError(t, model.DB.Where("user_id = ?", user.Id).Order("id ASC").Find(&subscriptions).Error)
+	require.Len(t, subscriptions, 2)
+	byUpgradeGroup := make(map[string]model.UserSubscription, len(subscriptions))
+	for _, subscription := range subscriptions {
+		byUpgradeGroup[subscription.UpgradeGroup] = subscription
+	}
+	pro, hasPro := byUpgradeGroup["pro"]
+	enterprise, hasEnterprise := byUpgradeGroup["enterprise"]
+	require.True(t, hasPro)
+	require.True(t, hasEnterprise)
+
+	var reloadedUser model.User
+	require.NoError(t, model.DB.First(&reloadedUser, user.Id).Error)
+	switch {
+	case pro.PrevUserGroup == "starter":
+		assert.Equal(t, "pro", enterprise.PrevUserGroup)
+		assert.Equal(t, "enterprise", reloadedUser.Group)
+	case enterprise.PrevUserGroup == "starter":
+		assert.Equal(t, "enterprise", pro.PrevUserGroup)
+		assert.Equal(t, "pro", reloadedUser.Group)
+	default:
+		t.Fatalf("neither subscription observed the initial group: pro=%q enterprise=%q", pro.PrevUserGroup, enterprise.PrevUserGroup)
+	}
+	assert.False(t, pro.PrevUserGroup == "starter" && enterprise.PrevUserGroup == "starter")
+	var logs int64
+	require.NoError(t, model.DB.Model(&model.Log{}).Where("user_id = ?", user.Id).Count(&logs).Error)
+	assert.Equal(t, int64(2), logs)
 }

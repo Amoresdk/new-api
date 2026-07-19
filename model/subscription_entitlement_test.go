@@ -1,6 +1,7 @@
 package model
 
 import (
+	"errors"
 	"math"
 	"strings"
 	"testing"
@@ -173,6 +174,65 @@ func TestSubscriptionEntitlementRejectsInvalidUTF8SnapshotContent(t *testing.T) 
 	raw = append(raw, []byte(`","duration_unit":"month","duration_value":1,"quota_reset_period":"never"}`)...)
 	_, err = DecodeSubscriptionEntitlementSnapshot(string(raw))
 	require.Error(t, err)
+}
+
+func TestSubscriptionEntitlementLocksExistingUserBeforePurchaseLimitRead(t *testing.T) {
+	truncateTables(t)
+	user := User{Id: 7114, Username: "entitlement_lock_user", Status: common.UserStatusEnabled, Group: "starter"}
+	require.NoError(t, DB.Create(&user).Error)
+
+	userWriteCompleted := false
+	const updateCallback = "test:subscription-entitlement-user-write"
+	const queryCallback = "test:subscription-entitlement-limit-after-write"
+	require.NoError(t, DB.Callback().Update().After("gorm:update").Register(updateCallback, func(tx *gorm.DB) {
+		if tx.Statement.Table == "users" {
+			userWriteCompleted = true
+			// MySQL may report zero rows for id=id. The delivery path must use
+			// an independent read to establish that the user exists.
+			tx.RowsAffected = 0
+		}
+	}))
+	require.NoError(t, DB.Callback().Query().Before("gorm:query").Register(queryCallback, func(tx *gorm.DB) {
+		if tx.Statement.Table == "user_subscriptions" && !userWriteCompleted {
+			tx.AddError(errors.New("purchase-limit read happened before user serialization write"))
+		}
+	}))
+	t.Cleanup(func() {
+		require.NoError(t, DB.Callback().Update().Remove(updateCallback))
+		require.NoError(t, DB.Callback().Query().Remove(queryCallback))
+	})
+
+	snapshot := SubscriptionEntitlementSnapshot{
+		Version: SubscriptionEntitlementVersion1, PlanId: 7115, PlanTitle: "Serialized Plan",
+		DurationUnit: SubscriptionDurationMonth, DurationValue: 1, MaxPurchasePerUser: 1,
+		UpgradeGroup: "pro", QuotaResetPeriod: SubscriptionResetNever,
+	}
+	var subscription *UserSubscription
+	require.NoError(t, DB.Transaction(func(tx *gorm.DB) error {
+		var err error
+		subscription, err = CreateUserSubscriptionFromEntitlementTx(tx, user.Id, snapshot, "agent_redemption")
+		return err
+	}))
+	require.NotNil(t, subscription)
+	assert.True(t, userWriteCompleted)
+	assert.Equal(t, "starter", subscription.PrevUserGroup)
+}
+
+func TestSubscriptionEntitlementRejectsMissingUserBeforeCreatingSubscription(t *testing.T) {
+	truncateTables(t)
+	snapshot := SubscriptionEntitlementSnapshot{
+		Version: SubscriptionEntitlementVersion1, PlanId: 7116, PlanTitle: "Missing User Plan",
+		DurationUnit: SubscriptionDurationMonth, DurationValue: 1,
+		QuotaResetPeriod: SubscriptionResetNever,
+	}
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		_, createErr := CreateUserSubscriptionFromEntitlementTx(tx, 999999, snapshot, "agent_redemption")
+		return createErr
+	})
+	require.ErrorIs(t, err, gorm.ErrRecordNotFound)
+	var subscriptions int64
+	require.NoError(t, DB.Model(&UserSubscription{}).Count(&subscriptions).Error)
+	assert.Zero(t, subscriptions)
 }
 
 func TestBuildSubscriptionEntitlementSnapshotRejectsInvalidEnabledPlanTerms(t *testing.T) {
