@@ -10,7 +10,7 @@ import (
 
 func TestAgentMoneyResponsesUseFixedDecimalStrings(t *testing.T) {
 	response := AgentCreditAdjustmentResponse{
-		Account: AgentAccountResponse{Balance: "1000.00"},
+		Account: AgentCreditBalanceResponse{Balance: "1000.00"},
 		Log: AgentCreditLogResponse{
 			Delta:         "1000.00",
 			BalanceBefore: "0.00",
@@ -26,4 +26,7 @@ func TestAgentMoneyResponsesUseFixedDecimalStrings(t *testing.T) {
 	assert.Contains(t, encoded, `"balance_before":"0.00"`)
 	assert.Contains(t, encoded, `"balance_after":"1000.00"`)
 	assert.NotContains(t, encoded, `"balance":100000`)
+	assert.NotContains(t, encoded, `"status"`)
+	assert.NotContains(t, encoded, `"version"`)
+	assert.NotContains(t, encoded, `"daily_code_limit"`)
 }

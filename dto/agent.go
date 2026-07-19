@@ -42,6 +42,10 @@ type AgentCreditLogResponse struct {
 }
 
 type AgentCreditAdjustmentResponse struct {
-	Account AgentAccountResponse   `json:"account"`
-	Log     AgentCreditLogResponse `json:"log"`
+	Account AgentCreditBalanceResponse `json:"account"`
+	Log     AgentCreditLogResponse     `json:"log"`
+}
+
+type AgentCreditBalanceResponse struct {
+	Balance string `json:"balance"`
 }

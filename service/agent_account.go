@@ -44,8 +44,15 @@ type AgentCreditAdjustment struct {
 }
 
 type AgentCreditAdjustmentResult struct {
-	Account model.AgentAccount
+	// Account is the stable balance snapshot produced by this adjustment. It is
+	// reconstructed from the immutable ledger on idempotent replay and is not a
+	// representation of the agent's current lifecycle or purchase-limit state.
+	Account AgentCreditBalanceSnapshot
 	Log     model.AgentCreditLog
+}
+
+type AgentCreditBalanceSnapshot struct {
+	Balance int64
 }
 
 type AgentAccountRecord struct {
@@ -77,6 +84,7 @@ func EnableAgent(userID int) (*model.AgentAccount, error) {
 
 	for attempt := 0; attempt < agentAccountMutationMaxAttempts; attempt++ {
 		var result model.AgentAccount
+		createFailed := false
 		err := model.DB.Transaction(func(tx *gorm.DB) error {
 			var user model.User
 			if err := tx.Select("id").Where("id = ?", userID).First(&user).Error; err != nil {
@@ -95,6 +103,7 @@ func EnableAgent(userID int) (*model.AgentAccount, error) {
 					DailyCodeLimit: model.DefaultAgentDailyCodeLimit,
 				}
 				if err := tx.Create(&account).Error; err != nil {
+					createFailed = true
 					return err
 				}
 				result = account
@@ -126,11 +135,23 @@ func EnableAgent(userID int) (*model.AgentAccount, error) {
 			}
 			account.Status = model.AgentAccountStatusActive
 			account.Version = updatedVersion
-			result = account
+			if err := tx.First(&result, account.Id).Error; err != nil {
+				return err
+			}
 			return nil
 		})
 		if errors.Is(err, errAgentAccountVersionConflict) {
 			continue
+		}
+		if err != nil && createFailed {
+			account, getErr := GetAgentAccount(userID)
+			if getErr == nil {
+				if account.Status == model.AgentAccountStatusActive {
+					return account, nil
+				}
+				continue
+			}
+			return nil, err
 		}
 		if err != nil {
 			return nil, err
@@ -208,7 +229,9 @@ func mutateAgentAccount(userID int, requireActive bool, mutate func(*model.Agent
 			if update.RowsAffected != 1 {
 				return errAgentAccountVersionConflict
 			}
-			result = account
+			if err := tx.First(&result, account.Id).Error; err != nil {
+				return err
+			}
 			return nil
 		})
 		if errors.Is(err, errAgentAccountVersionConflict) {
@@ -257,12 +280,10 @@ func AdjustAgentCredit(input AgentCreditAdjustment) (*AgentCreditAdjustmentResul
 					existing.Delta != delta || existing.Remark != input.Reason {
 					return ErrAgentIdempotencyConflict
 				}
-				var account model.AgentAccount
-				if err := tx.Where("user_id = ?", input.AgentUserID).First(&account).Error; err != nil {
-					return err
+				result = AgentCreditAdjustmentResult{
+					Account: AgentCreditBalanceSnapshot{Balance: existing.BalanceAfter},
+					Log:     existing,
 				}
-				account.Balance = existing.BalanceAfter
-				result = AgentCreditAdjustmentResult{Account: account, Log: existing}
 				return nil
 			}
 			if !errors.Is(err, gorm.ErrRecordNotFound) {
@@ -326,9 +347,10 @@ func AdjustAgentCredit(input AgentCreditAdjustment) (*AgentCreditAdjustmentResul
 			if err := tx.Create(&log).Error; err != nil {
 				return err
 			}
-			account.Balance = balanceAfter
-			account.Version = updatedVersion
-			result = AgentCreditAdjustmentResult{Account: account, Log: log}
+			result = AgentCreditAdjustmentResult{
+				Account: AgentCreditBalanceSnapshot{Balance: balanceAfter},
+				Log:     log,
+			}
 			return nil
 		})
 		if errors.Is(err, errAgentAccountVersionConflict) {
@@ -410,6 +432,13 @@ func ListAdminAgentCreditLogs(agentUserID int, start int, limit int) ([]model.Ag
 	}
 	if limit <= 0 {
 		limit = 10
+	}
+	var account model.AgentAccount
+	if err := model.DB.Select("id").Where("user_id = ?", agentUserID).First(&account).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, 0, ErrAgentAccountNotFound
+		}
+		return nil, 0, err
 	}
 	var total int64
 	query := model.DB.Model(&model.AgentCreditLog{}).Where("agent_user_id = ?", agentUserID)

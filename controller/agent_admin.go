@@ -149,7 +149,7 @@ func RootAdjustAgentCredit(c *gin.Context) {
 		"reason":        result.Log.Remark,
 	})
 	common.ApiSuccess(c, dto.AgentCreditAdjustmentResponse{
-		Account: agentAccountResponse(result.Account, "", ""),
+		Account: dto.AgentCreditBalanceResponse{Balance: service.FormatAgentPoints(result.Account.Balance)},
 		Log:     agentCreditLogResponse(result.Log),
 	})
 }

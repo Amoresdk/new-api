@@ -11,6 +11,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
@@ -204,6 +205,11 @@ func TestAdjustAgentCreditIsIdempotentAndRejectsKeyReuseWithDifferentPayload(t *
 	_, err = AdjustAgentCredit(input)
 	assert.ErrorIs(t, err, ErrAgentIdempotencyConflict)
 
+	input.Direction = AgentCreditDirectionCredit
+	input.Reason = "different reason"
+	_, err = AdjustAgentCredit(input)
+	assert.ErrorIs(t, err, ErrAgentIdempotencyConflict)
+
 	account, err := GetAgentAccount(14)
 	require.NoError(t, err)
 	assert.Equal(t, int64(1234), account.Balance)
@@ -281,7 +287,9 @@ func TestAdjustAgentCreditRetriesOneStaleVersionConflict(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, injected.Load())
 	assert.Equal(t, int64(500), result.Account.Balance)
-	assert.Equal(t, int64(1), result.Account.Version)
+	account, getErr := GetAgentAccount(16)
+	require.NoError(t, getErr)
+	assert.Equal(t, int64(1), account.Version)
 }
 
 func TestAdjustAgentCreditRollsBackBalanceWhenLedgerInsertFails(t *testing.T) {
@@ -355,4 +363,160 @@ func TestAgentAdminQueriesReturnOwnedAccountsAndLedger(t *testing.T) {
 	require.NoError(t, err)
 	assert.Zero(t, otherTotal)
 	assert.Empty(t, otherLogs)
+}
+
+func TestAdjustAgentCreditReplayReturnsStableHistoricalResultWithoutChangingCurrentAccount(t *testing.T) {
+	setupAgentAccountTest(t)
+	createAgentTestUser(t, 23)
+	_, err := EnableAgent(23)
+	require.NoError(t, err)
+
+	adjustmentA := AgentCreditAdjustment{
+		AgentUserID: 23, OperatorUserID: 1, Amount: 1000,
+		Direction: AgentCreditDirectionCredit, Reason: "first", IdempotencyKey: "stable-a",
+	}
+	first, err := AdjustAgentCredit(adjustmentA)
+	require.NoError(t, err)
+	_, err = AdjustAgentCredit(AgentCreditAdjustment{
+		AgentUserID: 23, OperatorUserID: 1, Amount: 500,
+		Direction: AgentCreditDirectionCredit, Reason: "second", IdempotencyKey: "stable-b",
+	})
+	require.NoError(t, err)
+	_, err = UpdateAgentDailyLimit(23, 350)
+	require.NoError(t, err)
+	_, err = DisableAgent(23)
+	require.NoError(t, err)
+
+	replayed, err := AdjustAgentCredit(adjustmentA)
+	require.NoError(t, err)
+	assert.Equal(t, first, replayed)
+
+	current, err := GetAgentAccount(23)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1500), current.Balance)
+	assert.Equal(t, 350, current.DailyCodeLimit)
+	assert.Equal(t, model.AgentAccountStatusDisabled, current.Status)
+	var count int64
+	require.NoError(t, model.DB.Model(&model.AgentCreditLog{}).Count(&count).Error)
+	assert.Equal(t, int64(2), count)
+}
+
+func TestAgentLifecycleReturnsPersistedVersionAndTimestamps(t *testing.T) {
+	setupAgentAccountTest(t)
+	createAgentTestUser(t, 24)
+	account, err := EnableAgent(24)
+	require.NoError(t, err)
+	require.NoError(t, model.DB.Model(&model.AgentAccount{}).Where("id = ?", account.Id).Update("updated_at", 1).Error)
+
+	disabled, err := DisableAgent(24)
+	require.NoError(t, err)
+	var stored model.AgentAccount
+	require.NoError(t, model.DB.First(&stored, account.Id).Error)
+	assert.Equal(t, stored, *disabled)
+	assert.Greater(t, disabled.UpdatedAt, int64(1))
+
+	reenabled, err := EnableAgent(24)
+	require.NoError(t, err)
+	require.NoError(t, model.DB.First(&stored, account.Id).Error)
+	assert.Equal(t, stored, *reenabled)
+}
+
+func TestListAdminAgentCreditLogsRejectsMissingAgent(t *testing.T) {
+	setupAgentAccountTest(t)
+
+	_, _, err := ListAdminAgentCreditLogs(999, 0, 10)
+	assert.ErrorIs(t, err, ErrAgentAccountNotFound)
+}
+
+func TestAdjustAgentCreditStopsAfterThreeVersionConflicts(t *testing.T) {
+	setupAgentAccountTest(t)
+	createAgentTestUser(t, 25)
+	_, err := EnableAgent(25)
+	require.NoError(t, err)
+
+	var conflicts atomic.Int32
+	callbackName := "test:agent_account_three_stale_versions"
+	require.NoError(t, model.DB.Callback().Update().Before("gorm:update").Register(callbackName, func(tx *gorm.DB) {
+		updates, ok := tx.Statement.Dest.(map[string]interface{})
+		if tx.Statement.Table != "agent_accounts" || !ok {
+			return
+		}
+		if _, updatingBalance := updates["balance"]; !updatingBalance {
+			return
+		}
+		conflicts.Add(1)
+		_, callbackErr := tx.Statement.ConnPool.ExecContext(context.Background(),
+			"UPDATE agent_accounts SET version = version + 1 WHERE user_id = ?", 25)
+		if callbackErr != nil {
+			tx.AddError(callbackErr)
+		}
+	}))
+	t.Cleanup(func() {
+		require.NoError(t, model.DB.Callback().Update().Remove(callbackName))
+	})
+
+	_, err = AdjustAgentCredit(AgentCreditAdjustment{
+		AgentUserID: 25, OperatorUserID: 1, Amount: 500,
+		Direction: AgentCreditDirectionCredit, Reason: "retry", IdempotencyKey: "retry-three",
+	})
+	assert.ErrorIs(t, err, ErrAgentAccountConflict)
+	assert.Equal(t, int32(agentAccountMutationMaxAttempts), conflicts.Load())
+
+	account, getErr := GetAgentAccount(25)
+	require.NoError(t, getErr)
+	assert.Zero(t, account.Balance)
+	assert.Zero(t, account.Version)
+}
+
+func TestEnableAgentReturnsConcurrentWinnerAfterCreateConflict(t *testing.T) {
+	originalDB := model.DB
+	dsn := "file:" + t.TempDir() + "/agent-enable.db?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)"
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	require.NoError(t, err)
+	winnerDB, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		sqlDB, sqlErr := db.DB()
+		if sqlErr == nil {
+			require.NoError(t, sqlDB.Close())
+		}
+		winnerSQLDB, winnerErr := winnerDB.DB()
+		if winnerErr == nil {
+			require.NoError(t, winnerSQLDB.Close())
+		}
+	})
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.AgentAccount{}))
+	model.DB = db
+	t.Cleanup(func() { model.DB = originalDB })
+	require.NoError(t, model.DB.Create(&model.User{
+		Id: 26, Username: "concurrent-agent", AffCode: "aff-26",
+		Status: common.UserStatusEnabled, Role: common.RoleCommonUser,
+	}).Error)
+
+	var inserted atomic.Bool
+	callbackName := "test:agent_enable_concurrent_winner"
+	require.NoError(t, db.Callback().Create().Before("gorm:create").Register(callbackName, func(tx *gorm.DB) {
+		if tx.Statement.Table != "agent_accounts" || inserted.Swap(true) {
+			return
+		}
+		winner := model.AgentAccount{
+			UserId: 26, Status: model.AgentAccountStatusActive,
+			DailyCodeLimit: model.DefaultAgentDailyCodeLimit,
+		}
+		if createErr := winnerDB.Create(&winner).Error; createErr != nil {
+			tx.AddError(createErr)
+		}
+	}))
+	t.Cleanup(func() {
+		require.NoError(t, db.Callback().Create().Remove(callbackName))
+	})
+
+	account, err := EnableAgent(26)
+	require.NoError(t, err)
+	assert.True(t, inserted.Load())
+	assert.Equal(t, 26, account.UserId)
+	assert.Equal(t, model.AgentAccountStatusActive, account.Status)
+	var count int64
+	require.NoError(t, model.DB.Model(&model.AgentAccount{}).Where("user_id = ?", 26).Count(&count).Error)
+	assert.Equal(t, int64(1), count)
 }
