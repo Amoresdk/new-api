@@ -89,13 +89,25 @@ const (
 )
 
 type UsageRankingGroupStat struct {
-	Group        string `json:"group"`
-	Quota        int64  `json:"quota"`
-	RequestCount int64  `json:"request_count"`
-	ErrorCount   int64  `json:"error_count"`
+	Group             string  `json:"group"`
+	Quota             int64   `json:"quota"`
+	RequestCount      int64   `json:"request_count"`
+	PromptTokens      int64   `json:"prompt_tokens"`
+	CompletionTokens  int64   `json:"completion_tokens"`
+	TotalTokens       int64   `json:"total_tokens"`
+	AverageUseTime    float64 `json:"avg_use_time"`
+	StreamCount       int64   `json:"stream_count"`
+	StreamRatio       float64 `json:"stream_ratio"`
+	ErrorCount        int64   `json:"error_count"`
+	ErrorRate         float64 `json:"error_rate"`
+	ModelCount        int64   `json:"model_count"`
+	TokenCount        int64   `json:"token_count"`
+	ChannelCount      int64   `json:"channel_count"`
+	LastUsedAt        int64   `json:"last_used_at"`
 }
 
 type UsageRankingItem struct {
+	Rank               int                     `json:"rank"`
 	UserID             int                     `json:"user_id"`
 	Username           string                  `json:"username"`
 	Quota              int64                   `json:"quota"`
@@ -103,21 +115,26 @@ type UsageRankingItem struct {
 	PromptTokens       int64                   `json:"prompt_tokens"`
 	CompletionTokens   int64                   `json:"completion_tokens"`
 	TotalTokens        int64                   `json:"total_tokens"`
-	AverageUseTime     float64                 `json:"average_use_time"`
+	AverageUseTime     float64                 `json:"avg_use_time"`
 	ErrorCount         int64                   `json:"error_count"`
 	ErrorRate          float64                 `json:"error_rate"`
 	StreamCount        int64                   `json:"stream_count"`
 	StreamRatio        float64                 `json:"stream_ratio"`
 	ModelCount         int64                   `json:"model_count"`
-	LatestRequestTime  int64                   `json:"latest_request_time"`
+	TokenCount         int64                   `json:"token_count"`
+	GroupCount         int64                   `json:"group_count"`
+	ChannelCount       int64                   `json:"channel_count"`
+	LastUsedAt         int64                   `json:"last_used_at"`
 	GroupStats         []UsageRankingGroupStat `json:"group_stats"`
 }
 
 type UsageRankingSummary struct {
-	Quota        int64 `json:"quota"`
-	RequestCount int64 `json:"request_count"`
-	TotalTokens  int64 `json:"total_tokens"`
-	ActiveUsers  int64 `json:"active_users"`
+	Quota             int64 `json:"quota"`
+	RequestCount      int64 `json:"request_count"`
+	PromptTokens      int64 `json:"prompt_tokens"`
+	CompletionTokens  int64 `json:"completion_tokens"`
+	TotalTokens       int64 `json:"total_tokens"`
+	ActiveUserCount   int64 `json:"active_user_count"`
 }
 
 type UsageRankingResult struct {
@@ -214,7 +231,7 @@ git commit -m "feat: expose root usage ranking api"
 - Create: `web/classic/src/components/table/usage-logs/ranking/UsageRankingFilters.jsx`
 - Create: `web/classic/src/components/table/usage-logs/ranking/UsageRankingSummary.jsx`
 - Create: `web/classic/src/components/table/usage-logs/ranking/UsageRankingTable.jsx`
-- Create: `web/classic/src/components/table/usage-logs/ranking/usage-ranking.css`
+- Create: `web/classic/src/components/table/usage-logs/ranking/usage-ranking-table.css`
 - Modify: `web/classic/src/components/table/usage-logs/index.jsx`
 
 **Interfaces:**
@@ -245,7 +262,7 @@ return {
 };
 ```
 
-When the API returns `success: false` or the request rejects, call `showError` and keep a safe empty response `{items: [], total: 0, summary: {quota: 0, request_count: 0, total_tokens: 0, active_users: 0}}`.
+When the API returns `success: false` or the request rejects, call `showError` and keep a safe empty response `{items: [], total: 0, summary: {quota: 0, request_count: 0, prompt_tokens: 0, completion_tokens: 0, total_tokens: 0, active_user_count: 0}}`.
 
 - [ ] **Step 2: Build Classic filters, summary cards, and responsive ranking rows**
 
@@ -280,7 +297,7 @@ git commit -m "feat(classic): add usage ranking view"
 - Modify: `web/default/src/features/usage-logs/types.ts`
 - Modify: `web/default/src/features/usage-logs/api.ts`
 - Modify: `web/default/src/features/usage-logs/index.tsx`
-- Create: `web/default/src/features/usage-logs/ranking/usage-ranking-view.tsx`
+- Create: `web/default/src/features/usage-logs/components/ranking/usage-ranking-view.tsx`
 
 **Interfaces:**
 - Consumes: `api`, `buildQueryParams`, `ROLE.SUPER_ADMIN`, `useAuthStore`, and the Default tabs component.
@@ -306,10 +323,22 @@ export interface UsageRankingGroupStat {
   group: string
   quota: number
   request_count: number
+  prompt_tokens: number
+  completion_tokens: number
+  total_tokens: number
+  avg_use_time: number
+  stream_count: number
+  stream_ratio: number
   error_count: number
+  error_rate: number
+  model_count: number
+  token_count: number
+  channel_count: number
+  last_used_at: number
 }
 
 export interface UsageRankingItem {
+  rank: number
   user_id: number
   username: string
   quota: number
@@ -317,13 +346,16 @@ export interface UsageRankingItem {
   prompt_tokens: number
   completion_tokens: number
   total_tokens: number
-  average_use_time: number
+  avg_use_time: number
   error_count: number
   error_rate: number
   stream_count: number
   stream_ratio: number
   model_count: number
-  latest_request_time: number
+  token_count: number
+  group_count: number
+  channel_count: number
+  last_used_at: number
   group_stats: UsageRankingGroupStat[]
 }
 ```
@@ -361,11 +393,11 @@ Commit together with Task 5 after all imported view components compile.
 ### Task 5: Default native ranking UI and responsive details
 
 **Files:**
-- Create: `web/default/src/features/usage-logs/ranking/usage-ranking-filter-bar.tsx`
-- Create: `web/default/src/features/usage-logs/ranking/usage-ranking-summary.tsx`
-- Create: `web/default/src/features/usage-logs/ranking/usage-ranking-columns.tsx`
-- Create: `web/default/src/features/usage-logs/ranking/usage-ranking-table.tsx`
-- Create: `web/default/src/features/usage-logs/ranking/usage-ranking-mobile-list.tsx`
+- Create: `web/default/src/features/usage-logs/components/ranking/usage-ranking-filter-bar.tsx`
+- Create: `web/default/src/features/usage-logs/components/ranking/usage-ranking-summary.tsx`
+- Create: `web/default/src/features/usage-logs/components/ranking/usage-ranking-columns.tsx`
+- Create: `web/default/src/features/usage-logs/components/ranking/usage-ranking-table.tsx`
+- Create: `web/default/src/features/usage-logs/components/ranking/usage-ranking-mobile-list.tsx`
 
 **Interfaces:**
 - Consumes: Task 4 ranking types and `UsageRankingView` state; existing Default inputs, buttons, cards, table, badge, collapsible, date/time formatting, quota formatting, and pagination conventions.
@@ -476,4 +508,3 @@ Expected: no whitespace errors; only ranking-related source, test, plan/spec, an
 git add web/classic/src/locales web/default/src/i18n/locales
 git commit -m "i18n: translate usage ranking"
 ```
-
