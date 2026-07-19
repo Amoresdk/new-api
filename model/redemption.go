@@ -43,14 +43,14 @@ func GetAllRedemptions(startIdx int, num int) (redemptions []*Redemption, total 
 	}()
 
 	// 获取总数
-	err = tx.Model(&Redemption{}).Count(&total).Error
+	err = tx.Model(&Redemption{}).Where("type = ?", common.RedemptionCodeTypeQuota).Count(&total).Error
 	if err != nil {
 		tx.Rollback()
 		return nil, 0, err
 	}
 
 	// 获取分页数据
-	err = tx.Order("id desc").Limit(num).Offset(startIdx).Find(&redemptions).Error
+	err = tx.Where("type = ?", common.RedemptionCodeTypeQuota).Order("id desc").Limit(num).Offset(startIdx).Find(&redemptions).Error
 	if err != nil {
 		tx.Rollback()
 		return nil, 0, err
@@ -75,7 +75,7 @@ func SearchRedemptions(keyword string, status string, startIdx int, num int) (re
 		}
 	}()
 
-	query := tx.Model(&Redemption{})
+	query := tx.Model(&Redemption{}).Where("type = ?", common.RedemptionCodeTypeQuota)
 
 	if keyword != "" {
 		if id, err := strconv.Atoi(keyword); err == nil {
@@ -134,7 +134,7 @@ func GetRedemptionById(id int) (*Redemption, error) {
 	}
 	redemption := Redemption{Id: id}
 	var err error = nil
-	err = DB.First(&redemption, "id = ?", id).Error
+	err = DB.Where("id = ? AND type = ?", id, common.RedemptionCodeTypeQuota).First(&redemption).Error
 	return &redemption, err
 }
 
@@ -153,7 +153,7 @@ func Redeem(key string, userId int) (quota int, err error) {
 	}
 	common.RandomSleep()
 	err = DB.Transaction(func(tx *gorm.DB) error {
-		err := lockForUpdate(tx).Where(keyCol+" = ?", key).First(redemption).Error
+		err := lockForUpdate(tx).Where(keyCol+" = ? AND type = ?", key, common.RedemptionCodeTypeQuota).First(redemption).Error
 		if err != nil {
 			return errors.New("无效的兑换码")
 		}
@@ -190,6 +190,9 @@ func Redeem(key string, userId int) (quota int, err error) {
 }
 
 func (redemption *Redemption) Insert() error {
+	if redemption.Type != common.RedemptionCodeTypeQuota {
+		return errors.New("legacy redemption insert only supports quota codes")
+	}
 	var err error
 	err = DB.Create(redemption).Error
 	return err
@@ -197,20 +200,39 @@ func (redemption *Redemption) Insert() error {
 
 func (redemption *Redemption) SelectUpdate() error {
 	// This can update zero values
-	return DB.Model(redemption).Select("redeemed_time", "status").Updates(redemption).Error
+	result := DB.Model(&Redemption{}).Where("id = ? AND type = ?", redemption.Id, common.RedemptionCodeTypeQuota).
+		Select("redeemed_time", "status").Updates(redemption)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return gorm.ErrRecordNotFound
+	}
+	return nil
 }
 
 // Update Make sure your token's fields is completed, because this will update non-zero values
 func (redemption *Redemption) Update() error {
-	var err error
-	err = DB.Model(redemption).Select("name", "status", "quota", "redeemed_time", "expired_time").Updates(redemption).Error
-	return err
+	result := DB.Model(&Redemption{}).Where("id = ? AND type = ?", redemption.Id, common.RedemptionCodeTypeQuota).
+		Select("name", "status", "quota", "redeemed_time", "expired_time").Updates(redemption)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return gorm.ErrRecordNotFound
+	}
+	return nil
 }
 
 func (redemption *Redemption) Delete() error {
-	var err error
-	err = DB.Delete(redemption).Error
-	return err
+	result := DB.Where("id = ? AND type = ?", redemption.Id, common.RedemptionCodeTypeQuota).Delete(&Redemption{})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return gorm.ErrRecordNotFound
+	}
+	return nil
 }
 
 func DeleteRedemptionById(id int) (err error) {
@@ -218,7 +240,7 @@ func DeleteRedemptionById(id int) (err error) {
 		return errors.New("id 为空！")
 	}
 	redemption := Redemption{Id: id}
-	err = DB.Where(redemption).First(&redemption).Error
+	err = DB.Where("id = ? AND type = ?", id, common.RedemptionCodeTypeQuota).First(&redemption).Error
 	if err != nil {
 		return err
 	}
@@ -227,6 +249,6 @@ func DeleteRedemptionById(id int) (err error) {
 
 func DeleteInvalidRedemptions() (int64, error) {
 	now := common.GetTimestamp()
-	result := DB.Where("status IN ? OR (status = ? AND expired_time != 0 AND expired_time < ?)", []int{common.RedemptionCodeStatusUsed, common.RedemptionCodeStatusDisabled}, common.RedemptionCodeStatusEnabled, now).Delete(&Redemption{})
+	result := DB.Where("type = ? AND (status IN ? OR (status = ? AND expired_time != 0 AND expired_time < ?))", common.RedemptionCodeTypeQuota, []int{common.RedemptionCodeStatusUsed, common.RedemptionCodeStatusDisabled}, common.RedemptionCodeStatusEnabled, now).Delete(&Redemption{})
 	return result.RowsAffected, result.Error
 }

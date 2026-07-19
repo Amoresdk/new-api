@@ -21,7 +21,6 @@ func TestAgentModels(t *testing.T) {
 
 	entities := []interface{}{
 		&AgentRefundRequest{},
-		&AgentCreditLog{},
 		&AgentPurchaseOrder{},
 		&AgentPlanOffer{},
 		&AgentAccount{},
@@ -30,10 +29,12 @@ func TestAgentModels(t *testing.T) {
 	for _, entity := range entities {
 		require.NoError(t, DB.Session(&gorm.Session{AllowGlobalUpdate: true}).Unscoped().Delete(entity).Error)
 	}
+	require.NoError(t, DB.Exec("DELETE FROM agent_credit_logs").Error)
 	t.Cleanup(func() {
 		for _, entity := range entities {
 			require.NoError(t, DB.Session(&gorm.Session{AllowGlobalUpdate: true}).Unscoped().Delete(entity).Error)
 		}
+		require.NoError(t, DB.Exec("DELETE FROM agent_credit_logs").Error)
 	})
 
 	account := AgentAccount{UserId: 101, Status: AgentAccountStatusActive, Balance: 10000, DailyCodeLimit: 200}
@@ -90,4 +91,100 @@ func TestAgentModels(t *testing.T) {
 	var loaded Redemption
 	require.NoError(t, DB.First(&loaded, legacy.Id).Error)
 	assert.Equal(t, common.RedemptionCodeTypeQuota, loaded.Type)
+}
+
+func TestAgentCreditLogIsImmutable(t *testing.T) {
+	require.NoError(t, DB.AutoMigrate(&AgentCreditLog{}))
+	require.NoError(t, DB.Exec("DELETE FROM agent_credit_logs").Error)
+	t.Cleanup(func() {
+		require.NoError(t, DB.Exec("DELETE FROM agent_credit_logs").Error)
+	})
+
+	log := AgentCreditLog{
+		AgentUserId:   101,
+		Delta:         100,
+		BalanceBefore: 0,
+		BalanceAfter:  100,
+		EventType:     AgentCreditEventAdminCredit,
+		BusinessKey:   "immutable-credit-log",
+	}
+	require.NoError(t, DB.Create(&log).Error)
+
+	err := DB.Model(&log).Update("remark", "changed").Error
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrAgentCreditLogImmutable)
+
+	err = DB.Delete(&log).Error
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrAgentCreditLogImmutable)
+}
+
+func TestAgentMoneyFieldsAreNotSerialized(t *testing.T) {
+	tests := []struct {
+		name   string
+		value  interface{}
+		fields []string
+	}{
+		{
+			name:   "account balance",
+			value:  AgentAccount{Balance: 100},
+			fields: []string{"\"balance\""},
+		},
+		{
+			name:   "credit log amounts",
+			value:  AgentCreditLog{Delta: 100, BalanceBefore: 200, BalanceAfter: 300},
+			fields: []string{"\"delta\"", "\"balance_before\"", "\"balance_after\""},
+		},
+		{
+			name:   "offer price",
+			value:  AgentPlanOffer{UnitPrice: 100},
+			fields: []string{"\"unit_price\""},
+		},
+		{
+			name:   "purchase order amounts",
+			value:  AgentPurchaseOrder{UnitPrice: 100, TotalPrice: 200, RefundedAmount: 300},
+			fields: []string{"\"unit_price\"", "\"total_price\"", "\"refunded_amount\""},
+		},
+		{
+			name:   "refund request amounts",
+			value:  AgentRefundRequest{FeeTotal: 100, RefundTotal: 200, BalanceAfter: 300},
+			fields: []string{"\"fee_total\"", "\"refund_total\"", "\"balance_after\""},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			raw, err := common.Marshal(tt.value)
+			require.NoError(t, err)
+			for _, field := range tt.fields {
+				assert.NotContains(t, string(raw), field)
+			}
+		})
+	}
+}
+
+func TestAgentModelDefaultsAreNormalizedInCode(t *testing.T) {
+	require.NoError(t, DB.AutoMigrate(&AgentAccount{}, &AgentPlanOffer{}))
+	require.NoError(t, DB.Session(&gorm.Session{AllowGlobalUpdate: true}).Unscoped().Delete(&AgentPlanOffer{}).Error)
+	require.NoError(t, DB.Session(&gorm.Session{AllowGlobalUpdate: true}).Unscoped().Delete(&AgentAccount{}).Error)
+	t.Cleanup(func() {
+		require.NoError(t, DB.Session(&gorm.Session{AllowGlobalUpdate: true}).Unscoped().Delete(&AgentPlanOffer{}).Error)
+		require.NoError(t, DB.Session(&gorm.Session{AllowGlobalUpdate: true}).Unscoped().Delete(&AgentAccount{}).Error)
+	})
+
+	account := AgentAccount{UserId: 301, Status: AgentAccountStatusActive}
+	require.NoError(t, account.BeforeCreate(DB))
+	assert.Equal(t, DefaultAgentDailyCodeLimit, account.DailyCodeLimit)
+	require.NoError(t, DB.Create(&account).Error)
+	var storedAccount AgentAccount
+	require.NoError(t, DB.First(&storedAccount, account.Id).Error)
+	assert.Equal(t, DefaultAgentDailyCodeLimit, storedAccount.DailyCodeLimit)
+
+	offer := AgentPlanOffer{PlanId: 401, Enabled: true}
+	require.NoError(t, offer.BeforeCreate(DB))
+	assert.Equal(t, DefaultAgentCodeValidDays, offer.CodeValidDays)
+	require.NoError(t, DB.Create(&offer).Error)
+	var storedOffer AgentPlanOffer
+	require.NoError(t, DB.First(&storedOffer, offer.Id).Error)
+	assert.Equal(t, DefaultAgentCodeValidDays, storedOffer.CodeValidDays)
 }
