@@ -43,14 +43,12 @@ type AgentPurchaseResult struct {
 
 type AgentOverview struct {
 	Account          model.AgentAccount
+	DailyCodeCount   int
 	DailyRemaining   int
 	NextDailyResetAt int64
 }
 
 func PurchaseAgentCodes(input AgentPurchaseInput) (*AgentPurchaseResult, error) {
-	if !operation_setting.GetAgentSetting().Enabled {
-		return nil, ErrAgentFeatureDisabled
-	}
 	input.IdempotencyKey = strings.TrimSpace(input.IdempotencyKey)
 	if input.Quantity < AgentPurchaseMinQuantity || input.Quantity > AgentPurchaseMaxQuantity {
 		return nil, ErrAgentPurchaseInvalidQuantity
@@ -60,20 +58,6 @@ func PurchaseAgentCodes(input AgentPurchaseInput) (*AgentPurchaseResult, error) 
 	}
 
 	for attempt := 0; attempt < agentAccountMutationMaxAttempts; attempt++ {
-		var expectedAccount model.AgentAccount
-		if err := model.DB.Where("user_id = ?", input.AgentUserID).First(&expectedAccount).Error; err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return nil, ErrAgentAccountNotFound
-			}
-			return nil, err
-		}
-		if expectedAccount.Status != model.AgentAccountStatusActive {
-			return nil, ErrAgentAccountDisabled
-		}
-		if expectedAccount.Balance < 0 || expectedAccount.Version == math.MaxInt64 {
-			return nil, ErrAgentBalanceOverflow
-		}
-
 		var existing model.AgentPurchaseOrder
 		err := model.DB.Where("agent_user_id = ? AND idempotency_key = ?", input.AgentUserID, input.IdempotencyKey).
 			First(&existing).Error
@@ -90,6 +74,33 @@ func PurchaseAgentCodes(input AgentPurchaseInput) (*AgentPurchaseResult, error) 
 			return replay, err
 		}
 		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, err
+		}
+		if !operation_setting.GetAgentSetting().Enabled {
+			return nil, ErrAgentFeatureDisabled
+		}
+
+		var expectedAccount model.AgentAccount
+		if err := model.DB.Where("user_id = ?", input.AgentUserID).First(&expectedAccount).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return nil, ErrAgentAccountNotFound
+			}
+			return nil, err
+		}
+		if expectedAccount.Status != model.AgentAccountStatusActive {
+			return nil, ErrAgentAccountDisabled
+		}
+		if expectedAccount.Balance < 0 || expectedAccount.Version == math.MaxInt64 {
+			return nil, ErrAgentBalanceOverflow
+		}
+		var preflightPlan model.SubscriptionPlan
+		if err := model.DB.Where("id = ?", input.PlanID).First(&preflightPlan).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return nil, ErrAgentPlanUnavailable
+			}
+			return nil, err
+		}
+		if _, err := validateAgentPurchasePlan(&preflightPlan); err != nil {
 			return nil, err
 		}
 
@@ -151,10 +162,10 @@ func PurchaseAgentCodes(input AgentPurchaseInput) (*AgentPurchaseResult, error) 
 				}
 				return err
 			}
-			if !plan.Enabled {
-				return ErrAgentPlanUnavailable
+			snapshot, err := validateAgentPurchasePlan(&plan)
+			if err != nil {
+				return err
 			}
-			plan.NormalizeDefaults()
 
 			total, err := AgentPurchaseTotal(offer.UnitPrice, input.Quantity)
 			if err != nil {
@@ -175,10 +186,6 @@ func PurchaseAgentCodes(input AgentPurchaseInput) (*AgentPurchaseResult, error) 
 				return ErrAgentDailyLimitExceeded
 			}
 
-			snapshot, err := model.BuildSubscriptionEntitlementSnapshot(&plan)
-			if err != nil {
-				return err
-			}
 			encodedSnapshot, err := model.EncodeSubscriptionEntitlementSnapshot(snapshot)
 			if err != nil {
 				return err
@@ -202,7 +209,7 @@ func PurchaseAgentCodes(input AgentPurchaseInput) (*AgentPurchaseResult, error) 
 
 			order := model.AgentPurchaseOrder{
 				OrderNo: common.GetUUID(), AgentUserId: input.AgentUserID,
-				PlanId: plan.Id, PlanTitle: plan.Title, Quantity: input.Quantity,
+				PlanId: plan.Id, PlanTitle: snapshot.PlanTitle, Quantity: input.Quantity,
 				UnitPrice: offer.UnitPrice, TotalPrice: total, CodeValidDays: offer.CodeValidDays,
 				RefundFeeBps: offer.RefundFeeBps, EntitlementSnapshot: encodedSnapshot,
 				IdempotencyKey: input.IdempotencyKey, Status: model.AgentPurchaseOrderStatusCompleted,
@@ -219,7 +226,7 @@ func PurchaseAgentCodes(input AgentPurchaseInput) (*AgentPurchaseResult, error) 
 			for index := 0; index < input.Quantity; index++ {
 				codes = append(codes, model.Redemption{
 					UserId: input.AgentUserID, Key: common.GetUUID(), Status: common.RedemptionCodeStatusEnabled,
-					Type: common.RedemptionCodeTypeSubscription, Name: plan.Title, CreatedTime: now.Unix(),
+					Type: common.RedemptionCodeTypeSubscription, Name: snapshot.PlanTitle, CreatedTime: now.Unix(),
 					AgentUserId: input.AgentUserID, AgentOrderId: order.Id, SubscriptionPlanId: plan.Id,
 					ExpiredTime: expiresAt,
 				})
@@ -290,7 +297,8 @@ func GetAgentOverview(agentUserID int) (*AgentOverview, error) {
 	}
 	nextReset := time.Date(now.Year(), now.Month(), now.Day()+1, 0, 0, 0, 0, time.Local)
 	return &AgentOverview{
-		Account: *account, DailyRemaining: dailyRemaining, NextDailyResetAt: nextReset.Unix(),
+		Account: *account, DailyCodeCount: dailyCount,
+		DailyRemaining: dailyRemaining, NextDailyResetAt: nextReset.Unix(),
 	}, nil
 }
 
@@ -323,10 +331,24 @@ func ListPurchasableAgentOffers(agentUserID int) ([]AgentPlanOfferRecord, error)
 		if !ok || offer.UnitPrice <= 0 || offer.CodeValidDays < 1 || offer.CodeValidDays > maxAgentCodeValidDays || offer.RefundFeeBps < 0 || offer.RefundFeeBps > 10000 {
 			continue
 		}
-		plan.NormalizeDefaults()
+		if _, err := validateAgentPurchasePlan(&plan); err != nil {
+			continue
+		}
 		result = append(result, AgentPlanOfferRecord{Offer: offer, Plan: plan})
 	}
 	return result, nil
+}
+
+func validateAgentPurchasePlan(plan *model.SubscriptionPlan) (model.SubscriptionEntitlementSnapshot, error) {
+	if plan == nil || !plan.Enabled {
+		return model.SubscriptionEntitlementSnapshot{}, ErrAgentPlanUnavailable
+	}
+	plan.NormalizeDefaults()
+	snapshot, err := model.BuildSubscriptionEntitlementSnapshot(plan)
+	if err != nil {
+		return model.SubscriptionEntitlementSnapshot{}, ErrAgentPlanUnavailable
+	}
+	return snapshot, nil
 }
 
 func getActiveAgentAccount(agentUserID int) (*model.AgentAccount, error) {

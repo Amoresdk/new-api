@@ -3,10 +3,12 @@ package model
 import (
 	"errors"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/pkg/cachex"
@@ -34,6 +36,8 @@ const (
 )
 
 const SubscriptionEntitlementVersion1 = 1
+
+const maxSubscriptionEntitlementSpanSeconds = int64(math.MaxInt64 / int64(time.Second))
 
 var (
 	ErrSubscriptionOrderNotFound      = errors.New("subscription order not found")
@@ -218,25 +222,43 @@ func BuildSubscriptionEntitlementSnapshot(plan *SubscriptionPlan) (SubscriptionE
 	if plan.AllowWalletOverflow != nil {
 		allowWalletOverflow = *plan.AllowWalletOverflow
 	}
-	return SubscriptionEntitlementSnapshot{
+	durationValue := plan.DurationValue
+	customSeconds := int64(0)
+	if plan.DurationUnit == SubscriptionDurationCustom {
+		durationValue = 0
+		customSeconds = plan.CustomSeconds
+	}
+	resetPeriod := strings.TrimSpace(plan.QuotaResetPeriod)
+	if resetPeriod == "" {
+		resetPeriod = SubscriptionResetNever
+	}
+	resetCustomSeconds := int64(0)
+	if resetPeriod == SubscriptionResetCustom {
+		resetCustomSeconds = plan.QuotaResetCustomSeconds
+	}
+	snapshot := SubscriptionEntitlementSnapshot{
 		Version:                 SubscriptionEntitlementVersion1,
 		PlanId:                  plan.Id,
-		PlanTitle:               plan.Title,
+		PlanTitle:               strings.TrimSpace(plan.Title),
 		DurationUnit:            plan.DurationUnit,
-		DurationValue:           plan.DurationValue,
-		CustomSeconds:           plan.CustomSeconds,
+		DurationValue:           durationValue,
+		CustomSeconds:           customSeconds,
 		MaxPurchasePerUser:      plan.MaxPurchasePerUser,
 		UpgradeGroup:            strings.TrimSpace(plan.UpgradeGroup),
 		DowngradeGroup:          strings.TrimSpace(plan.DowngradeGroup),
 		TotalAmount:             plan.TotalAmount,
-		QuotaResetPeriod:        NormalizeResetPeriod(plan.QuotaResetPeriod),
-		QuotaResetCustomSeconds: plan.QuotaResetCustomSeconds,
+		QuotaResetPeriod:        resetPeriod,
+		QuotaResetCustomSeconds: resetCustomSeconds,
 		AllowWalletOverflow:     allowWalletOverflow,
-	}, nil
+	}
+	if err := ValidateSubscriptionEntitlementSnapshot(snapshot); err != nil {
+		return SubscriptionEntitlementSnapshot{}, err
+	}
+	return snapshot, nil
 }
 
 func EncodeSubscriptionEntitlementSnapshot(snapshot SubscriptionEntitlementSnapshot) (string, error) {
-	if err := validateSubscriptionEntitlementSnapshot(snapshot); err != nil {
+	if err := ValidateSubscriptionEntitlementSnapshot(snapshot); err != nil {
 		return "", err
 	}
 	data, err := common.Marshal(snapshot)
@@ -251,18 +273,75 @@ func DecodeSubscriptionEntitlementSnapshot(value string) (SubscriptionEntitlemen
 	if err := common.UnmarshalJsonStr(value, &snapshot); err != nil {
 		return SubscriptionEntitlementSnapshot{}, err
 	}
-	if err := validateSubscriptionEntitlementSnapshot(snapshot); err != nil {
+	if err := ValidateSubscriptionEntitlementSnapshot(snapshot); err != nil {
 		return SubscriptionEntitlementSnapshot{}, err
 	}
 	return snapshot, nil
 }
 
-func validateSubscriptionEntitlementSnapshot(snapshot SubscriptionEntitlementSnapshot) error {
+// ValidateSubscriptionEntitlementSnapshot verifies that a versioned snapshot
+// can be delivered without invalid or overflowing entitlement arithmetic.
+func ValidateSubscriptionEntitlementSnapshot(snapshot SubscriptionEntitlementSnapshot) error {
 	if snapshot.Version != SubscriptionEntitlementVersion1 {
 		return fmt.Errorf("unsupported subscription entitlement version: %d", snapshot.Version)
 	}
 	if snapshot.PlanId <= 0 {
 		return errors.New("invalid subscription entitlement plan id")
+	}
+	if snapshot.PlanTitle == "" || !utf8.ValidString(snapshot.PlanTitle) || snapshot.PlanTitle != strings.TrimSpace(snapshot.PlanTitle) || utf8.RuneCountInString(snapshot.PlanTitle) > 128 {
+		return errors.New("invalid subscription entitlement plan title")
+	}
+	if snapshot.MaxPurchasePerUser < 0 {
+		return errors.New("invalid subscription entitlement purchase limit")
+	}
+	if snapshot.TotalAmount < 0 {
+		return errors.New("invalid subscription entitlement total amount")
+	}
+	if !utf8.ValidString(snapshot.UpgradeGroup) || !utf8.ValidString(snapshot.DowngradeGroup) ||
+		snapshot.UpgradeGroup != strings.TrimSpace(snapshot.UpgradeGroup) || snapshot.DowngradeGroup != strings.TrimSpace(snapshot.DowngradeGroup) ||
+		utf8.RuneCountInString(snapshot.UpgradeGroup) > 64 || utf8.RuneCountInString(snapshot.DowngradeGroup) > 64 {
+		return errors.New("invalid subscription entitlement group snapshot")
+	}
+	if err := validateSubscriptionDuration(snapshot.DurationUnit, snapshot.DurationValue, snapshot.CustomSeconds); err != nil {
+		return err
+	}
+	switch snapshot.QuotaResetPeriod {
+	case SubscriptionResetNever, SubscriptionResetDaily, SubscriptionResetWeekly, SubscriptionResetMonthly:
+	case SubscriptionResetCustom:
+		if snapshot.QuotaResetCustomSeconds <= 0 || snapshot.QuotaResetCustomSeconds > maxSubscriptionEntitlementSpanSeconds {
+			return errors.New("invalid custom subscription reset seconds")
+		}
+	default:
+		return fmt.Errorf("invalid subscription reset period: %s", snapshot.QuotaResetPeriod)
+	}
+	return nil
+}
+
+func validateSubscriptionDuration(unit string, value int, customSeconds int64) error {
+	switch unit {
+	case SubscriptionDurationYear:
+		if value <= 0 || int64(value) > maxSubscriptionEntitlementSpanSeconds/(366*24*60*60) {
+			return errors.New("invalid subscription duration years")
+		}
+	case SubscriptionDurationMonth:
+		if value <= 0 || int64(value) > maxSubscriptionEntitlementSpanSeconds/(31*24*60*60) {
+			return errors.New("invalid subscription duration months")
+		}
+	case SubscriptionDurationDay:
+		if value <= 0 || int64(value) > maxSubscriptionEntitlementSpanSeconds/(24*60*60) {
+			return errors.New("invalid subscription duration days")
+		}
+	case SubscriptionDurationHour:
+		if value <= 0 || int64(value) > maxSubscriptionEntitlementSpanSeconds/(60*60) {
+			return errors.New("invalid subscription duration hours")
+		}
+	case SubscriptionDurationCustom:
+		if customSeconds <= 0 || customSeconds > maxSubscriptionEntitlementSpanSeconds {
+			return errors.New("invalid custom subscription duration")
+		}
+		return nil
+	default:
+		return fmt.Errorf("invalid duration_unit: %s", unit)
 	}
 	return nil
 }
@@ -388,8 +467,8 @@ func calcPlanEndTime(start time.Time, plan *SubscriptionPlan) (int64, error) {
 	if plan == nil {
 		return 0, errors.New("plan is nil")
 	}
-	if plan.DurationValue <= 0 && plan.DurationUnit != SubscriptionDurationCustom {
-		return 0, errors.New("duration_value must be > 0")
+	if err := validateSubscriptionDuration(plan.DurationUnit, plan.DurationValue, plan.CustomSeconds); err != nil {
+		return 0, err
 	}
 	switch plan.DurationUnit {
 	case SubscriptionDurationYear:
@@ -401,9 +480,6 @@ func calcPlanEndTime(start time.Time, plan *SubscriptionPlan) (int64, error) {
 	case SubscriptionDurationHour:
 		return start.Add(time.Duration(plan.DurationValue) * time.Hour).Unix(), nil
 	case SubscriptionDurationCustom:
-		if plan.CustomSeconds <= 0 {
-			return 0, errors.New("custom_seconds must be > 0")
-		}
 		return start.Add(time.Duration(plan.CustomSeconds) * time.Second).Unix(), nil
 	default:
 		return 0, fmt.Errorf("invalid duration_unit: %s", plan.DurationUnit)
@@ -571,7 +647,7 @@ func CreateUserSubscriptionFromEntitlementTx(tx *gorm.DB, userId int, snapshot S
 	if tx == nil {
 		return nil, errors.New("tx is nil")
 	}
-	if err := validateSubscriptionEntitlementSnapshot(snapshot); err != nil {
+	if err := ValidateSubscriptionEntitlementSnapshot(snapshot); err != nil {
 		return nil, err
 	}
 	if userId <= 0 {

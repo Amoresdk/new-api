@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -206,8 +207,11 @@ func TestPurchaseAgentCodesIdempotentReplayIsStableAndRejectsParameterDrift(t *t
 		"unit_price": 9999, "code_valid_days": 1, "refund_fee_bps": 10000,
 	}).Error)
 	require.NoError(t, model.DB.Model(&model.SubscriptionPlan{}).Where("id = ?", plan.Id).Updates(map[string]interface{}{
-		"title": "Changed", "total_amount": 1,
+		"title": "Changed", "total_amount": 1, "enabled": false,
 	}).Error)
+	require.NoError(t, model.DB.Model(&model.AgentPlanOffer{}).Where("plan_id = ?", plan.Id).Update("enabled", false).Error)
+	require.NoError(t, model.DB.Model(&model.AgentAccount{}).Where("user_id = ?", 22).Update("status", model.AgentAccountStatusDisabled).Error)
+	operation_setting.GetAgentSetting().Enabled = false
 
 	replayed, err := PurchaseAgentCodes(input)
 	require.NoError(t, err)
@@ -235,6 +239,59 @@ func TestPurchaseAgentCodesIdempotentReplayIsStableAndRejectsParameterDrift(t *t
 	assert.Equal(t, int64(1), ledgerCount)
 }
 
+func TestPurchaseAgentCodesRejectsUndeliverablePlanBeforeAnyMutation(t *testing.T) {
+	tests := []struct {
+		name   string
+		update map[string]interface{}
+	}{
+		{name: "invalid duration", update: map[string]interface{}{"duration_unit": "fortnight"}},
+		{name: "negative amount", update: map[string]interface{}{"total_amount": -1}},
+		{name: "negative purchase limit", update: map[string]interface{}{"max_purchase_per_user": -1}},
+		{name: "invalid custom reset", update: map[string]interface{}{
+			"quota_reset_period": model.SubscriptionResetCustom, "quota_reset_custom_seconds": 0,
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			setupAgentPurchaseTest(t)
+			plan, _ := createPurchasableAgentFixture(t, 26, 100000, 200)
+			require.NoError(t, model.DB.Model(&model.SubscriptionPlan{}).Where("id = ?", plan.Id).Updates(tt.update).Error)
+			var accountUpdates atomic.Int32
+			callbackName := "test:invalid_plan_account_update:" + t.Name()
+			require.NoError(t, model.DB.Callback().Update().Before("gorm:update").Register(callbackName, func(tx *gorm.DB) {
+				if tx.Statement.Table == "agent_accounts" {
+					accountUpdates.Add(1)
+				}
+			}))
+			t.Cleanup(func() {
+				require.NoError(t, model.DB.Callback().Update().Remove(callbackName))
+			})
+
+			_, err := PurchaseAgentCodes(AgentPurchaseInput{
+				AgentUserID: 26, PlanID: plan.Id, Quantity: 1, IdempotencyKey: "invalid-plan",
+			})
+			assert.ErrorIs(t, err, ErrAgentPlanUnavailable)
+
+			account, err := GetAgentAccount(26)
+			require.NoError(t, err)
+			assert.Equal(t, int64(100000), account.Balance)
+			assert.Zero(t, account.DailyCodeCount)
+			assert.Zero(t, account.Version)
+			var orderCount, codeCount, ledgerCount int64
+			require.NoError(t, model.DB.Model(&model.AgentPurchaseOrder{}).Count(&orderCount).Error)
+			require.NoError(t, model.DB.Model(&model.Redemption{}).Where("type = ?", common.RedemptionCodeTypeSubscription).Count(&codeCount).Error)
+			require.NoError(t, model.DB.Model(&model.AgentCreditLog{}).Count(&ledgerCount).Error)
+			assert.Zero(t, orderCount)
+			assert.Zero(t, codeCount)
+			assert.Zero(t, ledgerCount)
+			assert.Zero(t, accountUpdates.Load())
+			offers, err := ListPurchasableAgentOffers(26)
+			require.NoError(t, err)
+			assert.Empty(t, offers)
+		})
+	}
+}
+
 func TestPurchaseAgentCodesRollsBackAccountOrderAndCodesWhenLedgerFails(t *testing.T) {
 	setupAgentPurchaseTest(t)
 	plan, _ := createPurchasableAgentFixture(t, 25, 100000, 200)
@@ -244,9 +301,6 @@ func TestPurchaseAgentCodesRollsBackAccountOrderAndCodesWhenLedgerFails(t *testi
 			tx.AddError(errors.New("injected purchase ledger failure"))
 		}
 	}))
-	t.Cleanup(func() {
-		require.NoError(t, model.DB.Callback().Create().Remove(callbackName))
-	})
 
 	_, err := PurchaseAgentCodes(AgentPurchaseInput{
 		AgentUserID: 25, PlanID: plan.Id, Quantity: 2, IdempotencyKey: "ledger-failure",
@@ -265,6 +319,33 @@ func TestPurchaseAgentCodesRollsBackAccountOrderAndCodesWhenLedgerFails(t *testi
 	assert.Zero(t, orderCount)
 	assert.Zero(t, codeCount)
 	assert.Zero(t, ledgerCount)
+
+	require.NoError(t, model.DB.Callback().Create().Remove(callbackName))
+	result, err := PurchaseAgentCodes(AgentPurchaseInput{
+		AgentUserID: 25, PlanID: plan.Id, Quantity: 2, IdempotencyKey: "ledger-failure",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, int64(88000), result.BalanceAfter)
+	assert.Len(t, result.Codes, 2)
+}
+
+func registerAgentPurchaseVersionBarrier(t *testing.T, participants int) (<-chan struct{}, chan<- struct{}) {
+	t.Helper()
+	arrived := make(chan struct{}, participants)
+	release := make(chan struct{})
+	var entered atomic.Int32
+	callbackName := "test:agent_purchase_version_barrier:" + t.Name()
+	require.NoError(t, model.DB.Callback().Update().Before("gorm:update").Register(callbackName, func(tx *gorm.DB) {
+		if tx.Statement.Table != "agent_accounts" || entered.Add(1) > int32(participants) {
+			return
+		}
+		arrived <- struct{}{}
+		<-release
+	}))
+	t.Cleanup(func() {
+		require.NoError(t, model.DB.Callback().Update().Remove(callbackName))
+	})
+	return arrived, release
 }
 
 func TestPurchaseAgentCodesConcurrentRequestsCannotOverspendOrExceedDailyLimit(t *testing.T) {
@@ -281,7 +362,7 @@ func TestPurchaseAgentCodesConcurrentRequestsCannotOverspendOrExceedDailyLimit(t
 		t.Run(tt.name, func(t *testing.T) {
 			setupAgentPurchaseTest(t)
 			plan, _ := createPurchasableAgentFixture(t, 23, tt.balance, tt.dailyLimit)
-			start := make(chan struct{})
+			arrived, release := registerAgentPurchaseVersionBarrier(t, 2)
 			results := make(chan *AgentPurchaseResult, 2)
 			errors := make(chan error, 2)
 			var wg sync.WaitGroup
@@ -289,7 +370,6 @@ func TestPurchaseAgentCodesConcurrentRequestsCannotOverspendOrExceedDailyLimit(t
 				wg.Add(1)
 				go func(index int) {
 					defer wg.Done()
-					<-start
 					result, err := PurchaseAgentCodes(AgentPurchaseInput{
 						AgentUserID: 23, PlanID: plan.Id, Quantity: 1,
 						IdempotencyKey: fmt.Sprintf("concurrent-%d", index),
@@ -301,7 +381,9 @@ func TestPurchaseAgentCodesConcurrentRequestsCannotOverspendOrExceedDailyLimit(t
 					results <- result
 				}(i)
 			}
-			close(start)
+			<-arrived
+			<-arrived
+			close(release)
 			wg.Wait()
 			close(results)
 			close(errors)
@@ -326,6 +408,54 @@ func TestPurchaseAgentCodesConcurrentRequestsCannotOverspendOrExceedDailyLimit(t
 	}
 }
 
+func TestPurchaseAgentCodesConcurrentSameIdempotencyKeyChargesOnceAndReplaysStableResult(t *testing.T) {
+	setupAgentPurchaseTest(t)
+	plan, _ := createPurchasableAgentFixture(t, 27, 100000, 200)
+	arrived, release := registerAgentPurchaseVersionBarrier(t, 2)
+	results := make(chan *AgentPurchaseResult, 2)
+	errors := make(chan error, 2)
+	var wg sync.WaitGroup
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			result, err := PurchaseAgentCodes(AgentPurchaseInput{
+				AgentUserID: 27, PlanID: plan.Id, Quantity: 2, IdempotencyKey: "same-key",
+			})
+			if err != nil {
+				errors <- err
+				return
+			}
+			results <- result
+		}()
+	}
+	<-arrived
+	<-arrived
+	close(release)
+	wg.Wait()
+	close(results)
+	close(errors)
+	require.Empty(t, errors)
+	require.Len(t, results, 2)
+	first := <-results
+	second := <-results
+	assert.Equal(t, first.Order, second.Order)
+	assert.Equal(t, first.Codes, second.Codes)
+	assert.Equal(t, first.BalanceAfter, second.BalanceAfter)
+
+	account, err := GetAgentAccount(27)
+	require.NoError(t, err)
+	assert.Equal(t, int64(88000), account.Balance)
+	assert.Equal(t, 2, account.DailyCodeCount)
+	var orderCount, codeCount, ledgerCount int64
+	require.NoError(t, model.DB.Model(&model.AgentPurchaseOrder{}).Count(&orderCount).Error)
+	require.NoError(t, model.DB.Model(&model.Redemption{}).Where("type = ?", common.RedemptionCodeTypeSubscription).Count(&codeCount).Error)
+	require.NoError(t, model.DB.Model(&model.AgentCreditLog{}).Where("event_type = ?", model.AgentCreditEventPurchase).Count(&ledgerCount).Error)
+	assert.Equal(t, int64(1), orderCount)
+	assert.Equal(t, int64(2), codeCount)
+	assert.Equal(t, int64(1), ledgerCount)
+}
+
 func TestAgentOverviewAndOffersRequireEnabledActiveAgent(t *testing.T) {
 	setupAgentPurchaseTest(t)
 	plan, _ := createPurchasableAgentFixture(t, 24, 100000, 200)
@@ -334,7 +464,17 @@ func TestAgentOverviewAndOffersRequireEnabledActiveAgent(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, int64(100000), overview.Account.Balance)
 	assert.Equal(t, 200, overview.DailyRemaining)
+	assert.Zero(t, overview.DailyCodeCount)
 	assert.Greater(t, overview.NextDailyResetAt, time.Now().Unix())
+
+	today := time.Now().In(time.Local).Format("2006-01-02")
+	require.NoError(t, model.DB.Model(&model.AgentAccount{}).Where("user_id = ?", 24).Updates(map[string]interface{}{
+		"daily_count_date": today, "daily_code_count": 7, "daily_code_limit": 5,
+	}).Error)
+	overview, err = GetAgentOverview(24)
+	require.NoError(t, err)
+	assert.Equal(t, 7, overview.DailyCodeCount)
+	assert.Zero(t, overview.DailyRemaining)
 
 	offers, err := ListPurchasableAgentOffers(24)
 	require.NoError(t, err)

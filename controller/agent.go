@@ -19,7 +19,7 @@ func GetAgentOverview(c *gin.Context) {
 		Status:             overview.Account.Status,
 		Balance:            service.FormatAgentPoints(overview.Account.Balance),
 		DailyCodeLimit:     overview.Account.DailyCodeLimit,
-		DailyCodeCount:     overview.Account.DailyCodeLimit - overview.DailyRemaining,
+		DailyCodeCount:     overview.DailyCodeCount,
 		DailyRemaining:     overview.DailyRemaining,
 		NextDailyResetAt:   overview.NextDailyResetAt,
 		AccountLastUpdated: overview.Account.UpdatedAt,
