@@ -16,6 +16,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { Package01Icon } from '@hugeicons/core-free-icons'
+import { HugeiconsIcon } from '@hugeicons/react'
 import {
   Activity,
   Box,
@@ -34,10 +36,21 @@ import {
   Users,
   Wallet,
 } from 'lucide-react'
+import { createElement } from 'react'
 import { useTranslation } from 'react-i18next'
 
-import { type SidebarData } from '@/components/layout/types'
+import type { SidebarData } from '@/components/layout/types'
+import { useAgentAccess } from '@/features/agents/hooks/use-agent-access'
 import { ROLE } from '@/lib/roles'
+
+function AgentWorkspaceIcon(props: { className?: string }) {
+  return createElement(HugeiconsIcon, {
+    icon: Package01Icon,
+    strokeWidth: 2,
+    className: props.className,
+    'aria-hidden': true,
+  })
+}
 
 /**
  * Root navigation groups for the application sidebar.
@@ -47,6 +60,7 @@ import { ROLE } from '@/lib/roles'
  */
 export function useSidebarData(): SidebarData {
   const { t } = useTranslation()
+  const agentAccess = useAgentAccess()
 
   return {
     navGroups: [
@@ -108,6 +122,15 @@ export function useSidebarData(): SidebarData {
             url: '/wallet',
             icon: Wallet,
           },
+          ...(agentAccess.globallyEnabled && agentAccess.hasAccess
+            ? [
+                {
+                  title: t('Agent workspace'),
+                  url: '/agent',
+                  icon: AgentWorkspaceIcon,
+                },
+              ]
+            : []),
           {
             title: t('Profile'),
             url: '/profile',
