@@ -278,7 +278,9 @@ const UsageRankingTable = ({
       className='usage-ranking-table rounded-xl overflow-hidden'
       size='middle'
       expandedRowKeys={expandedRowKeys}
-      onExpandedRowsChange={setExpandedRowKeys}
+      onExpandedRowsChange={(expandedRows = []) =>
+        setExpandedRowKeys(expandedRows.map((row) => row._ranking_key))
+      }
       expandedRowRender={(record) => (
         <div className='usage-ranking-group-stats'>
           <CardTable
