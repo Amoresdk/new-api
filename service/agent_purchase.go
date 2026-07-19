@@ -144,6 +144,9 @@ func PurchaseAgentCodes(input AgentPurchaseInput) (*AgentPurchaseResult, error) 
 			if account.Balance < 0 {
 				return ErrAgentBalanceOverflow
 			}
+			if err := guardAgentLedgerConsistencyTx(tx, &account); err != nil {
+				return err
+			}
 			var offer model.AgentPlanOffer
 			if err := tx.Where("plan_id = ?", input.PlanID).First(&offer).Error; err != nil {
 				if errors.Is(err, gorm.ErrRecordNotFound) {

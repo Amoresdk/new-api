@@ -135,12 +135,13 @@ type AgentRefundResponse struct {
 }
 
 type AgentReconciliationResponse struct {
-	AgentUserId int    `json:"agent_user_id"`
-	Balance     string `json:"balance"`
-	LedgerSum   string `json:"ledger_sum"`
-	Difference  string `json:"difference"`
-	LedgerCount int64  `json:"ledger_count"`
-	Matches     bool   `json:"matches"`
+	AgentUserId      int    `json:"agent_user_id"`
+	Balance          string `json:"balance"`
+	LedgerSum        string `json:"ledger_sum"`
+	Difference       string `json:"difference"`
+	LedgerCount      int64  `json:"ledger_count"`
+	LedgerContinuous bool   `json:"ledger_continuous"`
+	Matches          bool   `json:"matches"`
 }
 
 // AgentSubscriptionPlanResponse is the current plan catalog entry paired with

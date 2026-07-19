@@ -32,6 +32,7 @@ var (
 	ErrAgentAccountConflict     = errors.New("agent account was modified concurrently")
 
 	errAgentAccountVersionConflict = errors.New("agent account version conflict")
+	errAgentAdjustmentReplayRace   = errors.New("agent adjustment replay race")
 )
 
 type AgentCreditAdjustment struct {
@@ -268,33 +269,58 @@ func AdjustAgentCredit(input AgentCreditAdjustment) (*AgentCreditAdjustmentResul
 	}
 
 	for attempt := 0; attempt < agentAccountMutationMaxAttempts; attempt++ {
+		if existing, found, err := findAgentCreditAdjustment(model.DB, businessKey); err != nil {
+			return nil, err
+		} else if found {
+			return replayAgentCreditAdjustment(existing, input.AgentUserID, eventType, delta, input.Reason)
+		}
+
+		var expectedAccount model.AgentAccount
+		if err := model.DB.Where("user_id = ?", input.AgentUserID).First(&expectedAccount).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return nil, ErrAgentAccountNotFound
+			}
+			return nil, err
+		}
+		if expectedAccount.Status != model.AgentAccountStatusActive {
+			return nil, ErrAgentAccountDisabled
+		}
+		if expectedAccount.Balance < 0 {
+			return nil, ErrAgentBalanceOverflow
+		}
+		if delta > 0 && expectedAccount.Balance > math.MaxInt64-delta {
+			return nil, ErrAgentBalanceOverflow
+		}
+		if delta < 0 && expectedAccount.Balance < input.Amount {
+			return nil, ErrAgentInsufficientBalance
+		}
+		if expectedAccount.Version == math.MaxInt64 {
+			return nil, ErrAgentAccountConflict
+		}
+
 		var result AgentCreditAdjustmentResult
 		err := model.DB.Transaction(func(tx *gorm.DB) error {
-			var existing model.AgentCreditLog
-			err := tx.Where("event_type IN ? AND business_key = ?", []string{
-				model.AgentCreditEventAdminCredit,
-				model.AgentCreditEventAdminDebit,
-			}, businessKey).First(&existing).Error
-			if err == nil {
-				if existing.AgentUserId != input.AgentUserID || existing.EventType != eventType ||
-					existing.Delta != delta || existing.Remark != input.Reason {
-					return ErrAgentIdempotencyConflict
-				}
-				result = AgentCreditAdjustmentResult{
-					Account: AgentCreditBalanceSnapshot{Balance: existing.BalanceAfter},
-					Log:     existing,
-				}
-				return nil
+			guard := tx.Model(&model.AgentAccount{}).
+				Where("id = ? AND version = ? AND status = ?", expectedAccount.Id, expectedAccount.Version, model.AgentAccountStatusActive).
+				UpdateColumn("version", expectedAccount.Version+1)
+			if guard.Error != nil {
+				return guard.Error
 			}
-			if !errors.Is(err, gorm.ErrRecordNotFound) {
+			if guard.RowsAffected != 1 {
+				return errAgentAccountVersionConflict
+			}
+
+			if existing, found, err := findAgentCreditAdjustment(tx, businessKey); err != nil {
 				return err
+			} else if found {
+				if _, err := replayAgentCreditAdjustment(existing, input.AgentUserID, eventType, delta, input.Reason); err != nil {
+					return err
+				}
+				return errAgentAdjustmentReplayRace
 			}
 
 			var account model.AgentAccount
-			if err := tx.Where("user_id = ?", input.AgentUserID).First(&account).Error; err != nil {
-				if errors.Is(err, gorm.ErrRecordNotFound) {
-					return ErrAgentAccountNotFound
-				}
+			if err := tx.Where("id = ?", expectedAccount.Id).First(&account).Error; err != nil {
 				return err
 			}
 			if account.Status != model.AgentAccountStatusActive {
@@ -302,6 +328,9 @@ func AdjustAgentCredit(input AgentCreditAdjustment) (*AgentCreditAdjustmentResul
 			}
 			if account.Balance < 0 {
 				return ErrAgentBalanceOverflow
+			}
+			if err := guardAgentLedgerConsistencyTx(tx, &account); err != nil {
+				return err
 			}
 
 			balanceAfter := account.Balance
@@ -316,17 +345,9 @@ func AdjustAgentCredit(input AgentCreditAdjustment) (*AgentCreditAdjustmentResul
 				}
 				balanceAfter -= input.Amount
 			}
-			if account.Version == math.MaxInt64 {
-				return ErrAgentAccountConflict
-			}
-
-			updatedVersion := account.Version + 1
 			update := tx.Model(&model.AgentAccount{}).
 				Where("id = ? AND version = ?", account.Id, account.Version).
-				Updates(map[string]interface{}{
-					"balance": balanceAfter,
-					"version": updatedVersion,
-				})
+				UpdateColumn("balance", balanceAfter)
 			if update.Error != nil {
 				return update.Error
 			}
@@ -356,12 +377,40 @@ func AdjustAgentCredit(input AgentCreditAdjustment) (*AgentCreditAdjustmentResul
 		if errors.Is(err, errAgentAccountVersionConflict) {
 			continue
 		}
+		if errors.Is(err, errAgentAdjustmentReplayRace) {
+			if existing, found, findErr := findAgentCreditAdjustment(model.DB, businessKey); findErr != nil {
+				return nil, findErr
+			} else if found {
+				return replayAgentCreditAdjustment(existing, input.AgentUserID, eventType, delta, input.Reason)
+			}
+			continue
+		}
 		if err != nil {
 			return nil, err
 		}
 		return &result, nil
 	}
 	return nil, ErrAgentAccountConflict
+}
+
+func findAgentCreditAdjustment(db *gorm.DB, businessKey string) (model.AgentCreditLog, bool, error) {
+	var existing model.AgentCreditLog
+	result := db.Where("event_type IN ? AND business_key = ?", []string{
+		model.AgentCreditEventAdminCredit,
+		model.AgentCreditEventAdminDebit,
+	}, businessKey).Limit(1).Find(&existing)
+	return existing, result.RowsAffected == 1, result.Error
+}
+
+func replayAgentCreditAdjustment(existing model.AgentCreditLog, agentUserID int, eventType string, delta int64, reason string) (*AgentCreditAdjustmentResult, error) {
+	if existing.AgentUserId != agentUserID || existing.EventType != eventType ||
+		existing.Delta != delta || existing.Remark != reason {
+		return nil, ErrAgentIdempotencyConflict
+	}
+	return &AgentCreditAdjustmentResult{
+		Account: AgentCreditBalanceSnapshot{Balance: existing.BalanceAfter},
+		Log:     existing,
+	}, nil
 }
 
 func ListAdminAgentAccounts(keyword string, status string, start int, limit int) ([]AgentAccountRecord, int64, error) {

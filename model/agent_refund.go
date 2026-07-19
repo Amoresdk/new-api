@@ -1,5 +1,13 @@
 package model
 
+import (
+	"errors"
+
+	"gorm.io/gorm"
+)
+
+var ErrAgentRefundRequestImmutable = errors.New("agent refund request is immutable")
+
 // AgentRefundRequest persists the canonical result for an idempotent refund
 // batch, including the exact code set and resulting account balance.
 type AgentRefundRequest struct {
@@ -12,4 +20,12 @@ type AgentRefundRequest struct {
 	RefundTotal           int64  `json:"-" gorm:"type:bigint;not null"`
 	BalanceAfter          int64  `json:"-" gorm:"type:bigint;not null"`
 	CreatedAt             int64  `json:"created_at" gorm:"autoCreateTime"`
+}
+
+func (AgentRefundRequest) BeforeUpdate(*gorm.DB) error {
+	return ErrAgentRefundRequestImmutable
+}
+
+func (AgentRefundRequest) BeforeDelete(*gorm.DB) error {
+	return ErrAgentRefundRequestImmutable
 }

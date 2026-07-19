@@ -78,8 +78,8 @@ func TestAgentRefundRoutesEnforceOwnerRootAuditReconciliationAndCriticalRateLimi
 	}
 	require.NoError(t, db.Create(&order).Error)
 	codes := []model.Redemption{
-		{UserId: users[0].Id, AgentUserId: users[0].Id, AgentOrderId: order.Id, SubscriptionPlanId: order.PlanId, Type: common.RedemptionCodeTypeSubscription, Key: "self-refund-route-secret", Status: common.RedemptionCodeStatusEnabled, ExpiredTime: time.Now().Unix() + 3600},
-		{UserId: users[0].Id, AgentUserId: users[0].Id, AgentOrderId: order.Id, SubscriptionPlanId: order.PlanId, Type: common.RedemptionCodeTypeSubscription, Key: "root-refund-route-secret", Status: common.RedemptionCodeStatusEnabled, ExpiredTime: time.Now().Unix() + 3600},
+		{UserId: users[0].Id, AgentUserId: users[0].Id, AgentOrderId: order.Id, SubscriptionPlanId: order.PlanId, Type: common.RedemptionCodeTypeSubscription, Key: "self-refund-route-secret", Name: order.PlanTitle, Status: common.RedemptionCodeStatusEnabled, ExpiredTime: time.Now().Unix() + 3600},
+		{UserId: users[0].Id, AgentUserId: users[0].Id, AgentOrderId: order.Id, SubscriptionPlanId: order.PlanId, Type: common.RedemptionCodeTypeSubscription, Key: "root-refund-route-secret", Name: order.PlanTitle, Status: common.RedemptionCodeStatusEnabled, ExpiredTime: time.Now().Unix() + 3600},
 	}
 	require.NoError(t, db.Create(&codes).Error)
 

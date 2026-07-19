@@ -9,6 +9,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/gin-contrib/sessions"
 	"github.com/gin-contrib/sessions/cookie"
@@ -49,9 +50,15 @@ func TestAgentRoutesAuthenticateOwnerAndReturnStringMoney(t *testing.T) {
 		Role: common.RoleCommonUser, Status: common.UserStatusEnabled,
 	}).Error)
 	require.NoError(t, db.Create(&model.AgentAccount{
-		UserId: 51, Status: model.AgentAccountStatusActive, Balance: 100000,
+		UserId: 51, Status: model.AgentAccountStatusActive,
 		DailyCodeLimit: 200,
 	}).Error)
+	_, err = service.AdjustAgentCredit(service.AgentCreditAdjustment{
+		AgentUserID: 51, OperatorUserID: 1, Amount: 100000,
+		Direction: service.AgentCreditDirectionCredit, Reason: "test fixture funding",
+		IdempotencyKey: "agent-route-fixture-funding",
+	})
+	require.NoError(t, err)
 	plan := model.SubscriptionPlan{
 		Title: "Route Plan", Currency: "CNY", Enabled: true,
 		DurationUnit: model.SubscriptionDurationMonth, DurationValue: 1,

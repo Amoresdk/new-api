@@ -1,9 +1,12 @@
 package service
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -57,8 +60,14 @@ func setupAgentRefundTest(t *testing.T) agentRefundFixture {
 			AffCode: fmt.Sprintf("refund-aff-%d", userID), Status: common.UserStatusEnabled,
 		}).Error)
 		require.NoError(t, db.Create(&model.AgentAccount{
-			UserId: userID, Status: model.AgentAccountStatusActive, Balance: 1000,
+			UserId: userID, Status: model.AgentAccountStatusActive,
 		}).Error)
+		_, err := AdjustAgentCredit(AgentCreditAdjustment{
+			AgentUserID: userID, OperatorUserID: 1, Amount: 1000,
+			Direction: AgentCreditDirectionCredit, Reason: "test fixture funding",
+			IdempotencyKey: fmt.Sprintf("refund-fixture-funding-%d", userID),
+		})
+		require.NoError(t, err)
 	}
 
 	now := time.Now().Unix()
@@ -113,7 +122,7 @@ func TestRefundAgentCodesAcrossOrdersUsesSnapshotsAndSequentialLedger(t *testing
 	var account model.AgentAccount
 	require.NoError(t, model.DB.Where("user_id = ?", fixture.agentID).First(&account).Error)
 	assert.Equal(t, int64(16368), account.Balance)
-	assert.Equal(t, int64(1), account.Version)
+	assert.Equal(t, int64(2), account.Version)
 
 	var logs []model.AgentCreditLog
 	require.NoError(t, model.DB.Where("event_type = ?", model.AgentCreditEventRefund).Order("id ASC").Find(&logs).Error)
@@ -136,6 +145,148 @@ func TestRefundAgentCodesAcrossOrdersUsesSnapshotsAndSequentialLedger(t *testing
 	assert.Equal(t, 1, orderTwo.RefundedCount)
 	assert.Equal(t, int64(9668), orderTwo.RefundedAmount)
 	assert.Equal(t, model.AgentPurchaseOrderStatusRefunded, orderTwo.Status)
+}
+
+func TestRefundAgentCodesSupportsHundredPercentFeeWithoutBalanceWrite(t *testing.T) {
+	fixture := setupAgentRefundTest(t)
+	require.NoError(t, model.DB.Model(&model.AgentPurchaseOrder{}).Where("id = ?", fixture.orders[0].Id).
+		Update("refund_fee_bps", 10000).Error)
+	var balanceWrites atomic.Int32
+	var accountWrites atomic.Int32
+	callbackName := "test:refund-zero-balance-write"
+	require.NoError(t, model.DB.Callback().Update().After("gorm:update").Register(callbackName, func(tx *gorm.DB) {
+		if tx.Statement.Table == "agent_accounts" {
+			accountWrites.Add(1)
+			if strings.Contains(strings.ToLower(tx.Statement.SQL.String()), "balance") {
+				balanceWrites.Add(1)
+			}
+		}
+	}))
+	t.Cleanup(func() { require.NoError(t, model.DB.Callback().Update().Remove(callbackName)) })
+
+	result, err := RefundAgentCodes(AgentRefundInput{
+		AgentUserID: fixture.agentID, RedemptionIDs: []int{fixture.codes[0].Id},
+		IdempotencyKey: "full-fee", RequestedBy: fixture.agentID,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, int64(6000), result.Fee)
+	assert.Zero(t, result.Refunded)
+	assert.Equal(t, int64(1000), result.BalanceAfter)
+	assert.Equal(t, int32(1), accountWrites.Load(), "the version guard is the only required account write")
+	assert.Zero(t, balanceWrites.Load(), "zero refund must rely on the successful version guard, not a no-op balance update")
+	var ledger model.AgentCreditLog
+	require.NoError(t, model.DB.Where("event_type = ? AND redemption_id = ?", model.AgentCreditEventRefund, fixture.codes[0].Id).First(&ledger).Error)
+	assert.Zero(t, ledger.Delta)
+	assert.Equal(t, ledger.BalanceBefore, ledger.BalanceAfter)
+	var code model.Redemption
+	require.NoError(t, model.DB.First(&code, fixture.codes[0].Id).Error)
+	assert.Equal(t, common.RedemptionCodeStatusRefunded, code.Status)
+	var order model.AgentPurchaseOrder
+	require.NoError(t, model.DB.First(&order, fixture.orders[0].Id).Error)
+	assert.Equal(t, 1, order.RefundedCount)
+	assert.Zero(t, order.RefundedAmount)
+	assert.Equal(t, model.AgentPurchaseOrderStatusPartiallyRefunded, order.Status)
+	var request model.AgentRefundRequest
+	require.NoError(t, model.DB.Where("agent_user_id = ? AND idempotency_key = ?", fixture.agentID, "full-fee").First(&request).Error)
+	assert.Equal(t, int64(6000), request.FeeTotal)
+	assert.Zero(t, request.RefundTotal)
+	assert.Equal(t, int64(1000), request.BalanceAfter)
+}
+
+func TestRefundAgentCodesRejectsLedgerMismatchWithoutMutation(t *testing.T) {
+	fixture := setupAgentRefundTest(t)
+	require.NoError(t, model.DB.Model(&model.AgentAccount{}).Where("user_id = ?", fixture.agentID).
+		UpdateColumn("balance", int64(1001)).Error)
+	var before model.AgentAccount
+	require.NoError(t, model.DB.Where("user_id = ?", fixture.agentID).First(&before).Error)
+
+	_, err := RefundAgentCodes(AgentRefundInput{
+		AgentUserID: fixture.agentID, RedemptionIDs: []int{fixture.codes[0].Id},
+		IdempotencyKey: "refund-mismatch", RequestedBy: fixture.agentID,
+	})
+	assert.ErrorIs(t, err, ErrAgentLedgerMismatch)
+	var after model.AgentAccount
+	require.NoError(t, model.DB.Where("user_id = ?", fixture.agentID).First(&after).Error)
+	assert.Equal(t, before, after)
+	var code model.Redemption
+	require.NoError(t, model.DB.First(&code, fixture.codes[0].Id).Error)
+	assert.Equal(t, common.RedemptionCodeStatusEnabled, code.Status)
+	var requests, refunds int64
+	require.NoError(t, model.DB.Model(&model.AgentRefundRequest{}).Count(&requests).Error)
+	require.NoError(t, model.DB.Model(&model.AgentCreditLog{}).Where("event_type = ?", model.AgentCreditEventRefund).Count(&refunds).Error)
+	assert.Zero(t, requests)
+	assert.Zero(t, refunds)
+}
+
+func TestRefundAgentCodesRejectsEmptyKeyOrMismatchedName(t *testing.T) {
+	tests := []struct {
+		name  string
+		field string
+		value interface{}
+	}{
+		{name: "empty key", field: "key", value: ""},
+		{name: "mismatched name", field: "name", value: "tampered plan"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := setupAgentRefundTest(t)
+			require.NoError(t, model.DB.Model(&model.Redemption{}).Where("id = ?", fixture.codes[0].Id).
+				Update(test.field, test.value).Error)
+			var before model.AgentAccount
+			require.NoError(t, model.DB.Where("user_id = ?", fixture.agentID).First(&before).Error)
+			_, err := RefundAgentCodes(AgentRefundInput{
+				AgentUserID: fixture.agentID, RedemptionIDs: []int{fixture.codes[0].Id},
+				IdempotencyKey: "code-integrity", RequestedBy: fixture.agentID,
+			})
+			assert.ErrorIs(t, err, ErrAgentRefundUnavailable)
+			var after model.AgentAccount
+			require.NoError(t, model.DB.Where("user_id = ?", fixture.agentID).First(&after).Error)
+			assert.Equal(t, before, after)
+			var requests, refunds int64
+			require.NoError(t, model.DB.Model(&model.AgentRefundRequest{}).Count(&requests).Error)
+			require.NoError(t, model.DB.Model(&model.AgentCreditLog{}).Where("event_type = ?", model.AgentCreditEventRefund).Count(&refunds).Error)
+			assert.Zero(t, requests)
+			assert.Zero(t, refunds)
+		})
+	}
+}
+
+func TestRefundAgentCodesConditionalCASRejectsConcurrentCodeTampering(t *testing.T) {
+	fixture := setupAgentRefundTest(t)
+	code := fixture.codes[0]
+	var injected atomic.Bool
+	callbackName := "test:refund-code-integrity-cas"
+	require.NoError(t, model.DB.Callback().Update().Before("gorm:update").Register(callbackName, func(tx *gorm.DB) {
+		if tx.Statement.Table != "redemptions" || injected.Swap(true) {
+			return
+		}
+		if _, err := tx.Statement.ConnPool.ExecContext(tx.Statement.Context,
+			"UPDATE redemptions SET name = ? WHERE id = ?", "concurrent tamper", code.Id); err != nil {
+			tx.AddError(err)
+		}
+	}))
+	t.Cleanup(func() { require.NoError(t, model.DB.Callback().Update().Remove(callbackName)) })
+
+	var before model.AgentAccount
+	require.NoError(t, model.DB.Where("user_id = ?", fixture.agentID).First(&before).Error)
+	_, err := RefundAgentCodes(AgentRefundInput{
+		AgentUserID: fixture.agentID, RedemptionIDs: []int{code.Id},
+		IdempotencyKey: "concurrent-code-tamper", RequestedBy: fixture.agentID,
+	})
+	assert.ErrorIs(t, err, ErrAgentRefundUnavailable)
+	assert.True(t, injected.Load())
+	var after model.AgentAccount
+	require.NoError(t, model.DB.Where("user_id = ?", fixture.agentID).First(&after).Error)
+	assert.Equal(t, before, after)
+	var persisted model.Redemption
+	require.NoError(t, model.DB.First(&persisted, code.Id).Error)
+	assert.Equal(t, code.Name, persisted.Name, "the injected tamper must roll back with the failed refund")
+	assert.Equal(t, common.RedemptionCodeStatusEnabled, persisted.Status)
+	var requests, refunds int64
+	require.NoError(t, model.DB.Model(&model.AgentRefundRequest{}).Count(&requests).Error)
+	require.NoError(t, model.DB.Model(&model.AgentCreditLog{}).Where("event_type = ?", model.AgentCreditEventRefund).Count(&refunds).Error)
+	assert.Zero(t, requests)
+	assert.Zero(t, refunds)
 }
 
 func TestRefundAgentCodesIdempotencyResolvesBeforeCurrentState(t *testing.T) {
@@ -202,7 +353,7 @@ func TestRefundAgentCodesRejectsInvalidOrMixedBatchesWithoutPartialChanges(t *te
 			assert.Equal(t, int64(1), enabled)
 			var requestCount, logCount int64
 			require.NoError(t, model.DB.Model(&model.AgentRefundRequest{}).Count(&requestCount).Error)
-			require.NoError(t, model.DB.Model(&model.AgentCreditLog{}).Count(&logCount).Error)
+			require.NoError(t, model.DB.Model(&model.AgentCreditLog{}).Where("event_type = ?", model.AgentCreditEventRefund).Count(&logCount).Error)
 			assert.Zero(t, requestCount)
 			assert.Zero(t, logCount)
 		})
@@ -250,7 +401,7 @@ func TestRefundAgentCodesRejectsInconsistentOrderSnapshotAndRollsBack(t *testing
 			var account model.AgentAccount
 			require.NoError(t, model.DB.Where("user_id = ?", fixture.agentID).First(&account).Error)
 			assert.Equal(t, int64(1000), account.Balance)
-			assert.Zero(t, account.Version)
+			assert.Equal(t, int64(1), account.Version)
 			var code model.Redemption
 			require.NoError(t, model.DB.First(&code, fixture.codes[0].Id).Error)
 			assert.Equal(t, common.RedemptionCodeStatusEnabled, code.Status)
@@ -281,23 +432,26 @@ func TestRefundAgentCodesDisabledSelfRejectedButRootAllowed(t *testing.T) {
 func TestRefundAgentCodesRollsBackWhenLedgerInsertFails(t *testing.T) {
 	fixture := setupAgentRefundTest(t)
 	code := fixture.codes[0]
-	require.NoError(t, model.DB.Create(&model.AgentCreditLog{
-		AgentUserId: fixture.agentID, EventType: model.AgentCreditEventRefund,
-		BusinessKey: "refund:" + fmt.Sprint(code.Id), RedemptionId: code.Id,
-	}).Error)
+	callbackName := "test:refund-ledger-create-failure"
+	require.NoError(t, model.DB.Callback().Create().Before("gorm:create").Register(callbackName, func(tx *gorm.DB) {
+		if tx.Statement.Table == "agent_credit_logs" {
+			tx.AddError(errors.New("injected refund ledger failure"))
+		}
+	}))
+	t.Cleanup(func() { require.NoError(t, model.DB.Callback().Create().Remove(callbackName)) })
 
 	_, err := RefundAgentCodes(AgentRefundInput{
 		AgentUserID: fixture.agentID, RedemptionIDs: []int{code.Id},
 		IdempotencyKey: "ledger-failure", RequestedBy: fixture.agentID,
 	})
-	assert.ErrorIs(t, err, ErrAgentRefundUnavailable)
+	assert.ErrorContains(t, err, "injected refund ledger failure")
 	var persisted model.Redemption
 	require.NoError(t, model.DB.First(&persisted, code.Id).Error)
 	assert.Equal(t, common.RedemptionCodeStatusEnabled, persisted.Status)
 	var account model.AgentAccount
 	require.NoError(t, model.DB.Where("user_id = ?", fixture.agentID).First(&account).Error)
 	assert.Equal(t, int64(1000), account.Balance)
-	assert.Zero(t, account.Version)
+	assert.Equal(t, int64(1), account.Version)
 	var requests int64
 	require.NoError(t, model.DB.Model(&model.AgentRefundRequest{}).Count(&requests).Error)
 	assert.Zero(t, requests)
@@ -309,17 +463,21 @@ func TestRefundAgentCodesRollsBackWhenLedgerInsertFails(t *testing.T) {
 
 func TestReconcileAgentAccountReportsMismatchWithoutRepair(t *testing.T) {
 	fixture := setupAgentRefundTest(t)
-	require.NoError(t, model.DB.Create(&[]model.AgentCreditLog{
-		{AgentUserId: fixture.agentID, Delta: 1500, BalanceBefore: 0, BalanceAfter: 1500, EventType: model.AgentCreditEventAdminCredit, BusinessKey: "reconcile-credit"},
-		{AgentUserId: fixture.agentID, Delta: -500, BalanceBefore: 1500, BalanceAfter: 1000, EventType: model.AgentCreditEventPurchase, BusinessKey: "reconcile-purchase"},
-	}).Error)
-
 	result, err := ReconcileAgentAccount(fixture.agentID)
 	require.NoError(t, err)
 	assert.True(t, result.Matches)
+	assert.True(t, result.LedgerContinuous)
 	assert.Equal(t, int64(1000), result.Balance)
 	assert.Equal(t, int64(1000), result.LedgerSum)
 	assert.Zero(t, result.Difference)
+
+	require.NoError(t, model.DB.Exec("UPDATE agent_credit_logs SET balance_before = ? WHERE agent_user_id = ?", 1, fixture.agentID).Error)
+	result, err = ReconcileAgentAccount(fixture.agentID)
+	require.NoError(t, err)
+	assert.False(t, result.Matches)
+	assert.False(t, result.LedgerContinuous)
+	assert.Zero(t, result.Difference)
+	require.NoError(t, model.DB.Exec("UPDATE agent_credit_logs SET balance_before = ? WHERE agent_user_id = ?", 0, fixture.agentID).Error)
 
 	require.NoError(t, model.DB.Model(&model.AgentAccount{}).Where("user_id = ?", fixture.agentID).Update("balance", int64(1200)).Error)
 	result, err = ReconcileAgentAccount(fixture.agentID)
@@ -329,6 +487,69 @@ func TestReconcileAgentAccountReportsMismatchWithoutRepair(t *testing.T) {
 	var persisted int64
 	require.NoError(t, model.DB.Model(&model.AgentAccount{}).Where("user_id = ?", fixture.agentID).Pluck("balance", &persisted).Error)
 	assert.Equal(t, int64(1200), persisted, "reconciliation must never repair the account")
+}
+
+func TestReconcileAgentAccountRetriesConcurrentFinancialCommitWithoutFalseMismatch(t *testing.T) {
+	fixture := setupAgentRefundTest(t)
+	firstReadComplete := make(chan struct{})
+	releaseFirstRead := make(chan struct{})
+	var accountReads atomic.Int32
+	callbackName := "test:reconciliation-concurrent-commit"
+	require.NoError(t, model.DB.Callback().Query().After("gorm:query").Register(callbackName, func(tx *gorm.DB) {
+		if tx.Statement.Table != "agent_accounts" || accountReads.Add(1) != 1 {
+			return
+		}
+		close(firstReadComplete)
+		<-releaseFirstRead
+	}))
+	t.Cleanup(func() { require.NoError(t, model.DB.Callback().Query().Remove(callbackName)) })
+
+	resultCh := make(chan *AgentReconciliation, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		result, err := ReconcileAgentAccount(fixture.agentID)
+		resultCh <- result
+		errCh <- err
+	}()
+	<-firstReadComplete
+	_, err := AdjustAgentCredit(AgentCreditAdjustment{
+		AgentUserID: fixture.agentID, OperatorUserID: 1, Amount: 500,
+		Direction: AgentCreditDirectionCredit, Reason: "concurrent funding",
+		IdempotencyKey: "reconciliation-concurrent-funding",
+	})
+	require.NoError(t, err)
+	close(releaseFirstRead)
+
+	result := <-resultCh
+	require.NoError(t, <-errCh)
+	require.NotNil(t, result)
+	assert.True(t, result.Matches)
+	assert.True(t, result.LedgerContinuous)
+	assert.Equal(t, int64(1500), result.Balance)
+	assert.Equal(t, int64(1500), result.LedgerSum)
+	assert.Equal(t, int64(2), result.LedgerCount)
+	assert.GreaterOrEqual(t, accountReads.Load(), int32(4), "one retry requires two account reads per attempt")
+}
+
+func TestReconcileAgentAccountStopsAfterBoundedUnstableSnapshots(t *testing.T) {
+	fixture := setupAgentRefundTest(t)
+	var reads atomic.Int32
+	callbackName := "test:reconciliation-bounded-retries"
+	require.NoError(t, model.DB.Callback().Query().After("gorm:query").Register(callbackName, func(tx *gorm.DB) {
+		if tx.Statement.Table != "agent_accounts" {
+			return
+		}
+		reads.Add(1)
+		if _, err := tx.Statement.ConnPool.ExecContext(tx.Statement.Context,
+			"UPDATE agent_accounts SET version = version + 1 WHERE user_id = ?", fixture.agentID); err != nil {
+			tx.AddError(err)
+		}
+	}))
+	t.Cleanup(func() { require.NoError(t, model.DB.Callback().Query().Remove(callbackName)) })
+
+	_, err := ReconcileAgentAccount(fixture.agentID)
+	assert.ErrorIs(t, err, ErrAgentReconciliationUnstable)
+	assert.Equal(t, int32(agentReconciliationMaxAttempts*2), reads.Load())
 }
 
 func TestRefundAndRedeemSameCodeHaveExactlyOneWinner(t *testing.T) {

@@ -20,7 +20,6 @@ func TestAgentModels(t *testing.T) {
 	))
 
 	entities := []interface{}{
-		&AgentRefundRequest{},
 		&AgentPurchaseOrder{},
 		&AgentPlanOffer{},
 		&AgentAccount{},
@@ -29,11 +28,13 @@ func TestAgentModels(t *testing.T) {
 	for _, entity := range entities {
 		require.NoError(t, DB.Session(&gorm.Session{AllowGlobalUpdate: true}).Unscoped().Delete(entity).Error)
 	}
+	require.NoError(t, DB.Exec("DELETE FROM agent_refund_requests").Error)
 	require.NoError(t, DB.Exec("DELETE FROM agent_credit_logs").Error)
 	t.Cleanup(func() {
 		for _, entity := range entities {
 			require.NoError(t, DB.Session(&gorm.Session{AllowGlobalUpdate: true}).Unscoped().Delete(entity).Error)
 		}
+		require.NoError(t, DB.Exec("DELETE FROM agent_refund_requests").Error)
 		require.NoError(t, DB.Exec("DELETE FROM agent_credit_logs").Error)
 	})
 
@@ -117,6 +118,29 @@ func TestAgentCreditLogIsImmutable(t *testing.T) {
 	err = DB.Delete(&log).Error
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrAgentCreditLogImmutable)
+}
+
+func TestAgentRefundRequestIsImmutable(t *testing.T) {
+	require.NoError(t, DB.AutoMigrate(&AgentRefundRequest{}))
+	require.NoError(t, DB.Exec("DELETE FROM agent_refund_requests").Error)
+	t.Cleanup(func() {
+		require.NoError(t, DB.Exec("DELETE FROM agent_refund_requests").Error)
+	})
+
+	request := AgentRefundRequest{
+		AgentUserId: 101, IdempotencyKey: "immutable-refund-request",
+		RequestHash: "hash", RedemptionIDsSnapshot: "[1]",
+		FeeTotal: 300, RefundTotal: 5700, BalanceAfter: 5700,
+	}
+	require.NoError(t, DB.Create(&request).Error)
+
+	err := DB.Model(&request).Update("refund_total", int64(1)).Error
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrAgentRefundRequestImmutable)
+
+	err = DB.Delete(&request).Error
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrAgentRefundRequestImmutable)
 }
 
 func TestAgentMoneyFieldsAreNotSerialized(t *testing.T) {

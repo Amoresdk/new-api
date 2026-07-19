@@ -20,7 +20,6 @@ const AgentRefundMaxCodes = 100
 var (
 	ErrAgentRefundInvalidRequest = errors.New("invalid agent refund request")
 	ErrAgentRefundUnavailable    = errors.New("agent package codes are unavailable for refund")
-	ErrAgentReconciliation       = errors.New("agent reconciliation arithmetic overflow")
 )
 
 type AgentRefundInput struct {
@@ -37,15 +36,6 @@ type AgentRefundResult struct {
 	Fee           int64 `json:"-"`
 	Refunded      int64 `json:"-"`
 	BalanceAfter  int64 `json:"-"`
-}
-
-type AgentReconciliation struct {
-	AgentUserID int   `json:"agent_user_id"`
-	Balance     int64 `json:"-"`
-	LedgerSum   int64 `json:"-"`
-	Difference  int64 `json:"-"`
-	LedgerCount int64 `json:"ledger_count"`
-	Matches     bool  `json:"matches"`
 }
 
 type agentRefundOrderTotals struct {
@@ -110,17 +100,6 @@ func RefundAgentCodes(input AgentRefundInput) (*AgentRefundResult, error) {
 			return errAgentPurchaseUniqueConflict
 		}
 
-		request := model.AgentRefundRequest{
-			AgentUserId: input.AgentUserID, IdempotencyKey: input.IdempotencyKey,
-			RequestHash: requestHash, RedemptionIDsSnapshot: snapshot,
-		}
-		if err := tx.Create(&request).Error; err != nil {
-			if isAgentPurchaseUniqueConflict(err) {
-				return errAgentPurchaseUniqueConflict
-			}
-			return err
-		}
-
 		var account model.AgentAccount
 		if err := tx.Where("id = ?", expectedAccount.Id).First(&account).Error; err != nil {
 			return err
@@ -130,6 +109,9 @@ func RefundAgentCodes(input AgentRefundInput) (*AgentRefundResult, error) {
 		}
 		if account.Balance < 0 {
 			return ErrAgentBalanceOverflow
+		}
+		if err := guardAgentLedgerConsistencyTx(tx, &account); err != nil {
+			return err
 		}
 
 		var codes []model.Redemption
@@ -174,7 +156,8 @@ func RefundAgentCodes(input AgentRefundInput) (*AgentRefundResult, error) {
 		refundTotal := int64(0)
 		for _, code := range codes {
 			order, exists := ordersByID[code.AgentOrderId]
-			if !exists || code.UserId != input.AgentUserID || code.SubscriptionPlanId != order.PlanId ||
+			if !exists || code.UserId != input.AgentUserID || code.Key == "" || code.Name != order.PlanTitle ||
+				code.AgentOrderId != order.Id || code.SubscriptionPlanId != order.PlanId ||
 				code.Status != common.RedemptionCodeStatusEnabled || code.ExpiredTime <= now ||
 				code.UsedUserId != 0 || code.RedeemedTime != 0 {
 				return ErrAgentRefundUnavailable
@@ -204,26 +187,44 @@ func RefundAgentCodes(input AgentRefundInput) (*AgentRefundResult, error) {
 			return ErrAgentBalanceOverflow
 		}
 
-		codeUpdate := tx.Model(&model.Redemption{}).
-			Where("id IN ? AND type = ? AND agent_user_id = ? AND status = ? AND expired_time > ?", ids,
-				common.RedemptionCodeTypeSubscription, input.AgentUserID, common.RedemptionCodeStatusEnabled, now).
-			Updates(map[string]interface{}{"status": common.RedemptionCodeStatusRefunded})
-		if codeUpdate.Error != nil {
-			return codeUpdate.Error
+		request := model.AgentRefundRequest{
+			AgentUserId: input.AgentUserID, IdempotencyKey: input.IdempotencyKey,
+			RequestHash: requestHash, RedemptionIDsSnapshot: snapshot,
+			FeeTotal: feeTotal, RefundTotal: refundTotal, BalanceAfter: account.Balance + refundTotal,
 		}
-		if codeUpdate.RowsAffected != int64(len(ids)) {
-			return ErrAgentRefundUnavailable
+		if err := tx.Create(&request).Error; err != nil {
+			if isAgentPurchaseUniqueConflict(err) {
+				return errAgentPurchaseUniqueConflict
+			}
+			return err
+		}
+
+		for _, code := range codes {
+			codeUpdate := tx.Model(&model.Redemption{}).
+				Where("id = ? AND type = ? AND user_id = ? AND agent_user_id = ? AND agent_order_id = ? AND subscription_plan_id = ?", code.Id,
+					common.RedemptionCodeTypeSubscription, input.AgentUserID, input.AgentUserID, code.AgentOrderId, code.SubscriptionPlanId).
+				Where("key = ? AND name = ? AND status = ? AND expired_time > ? AND used_user_id = ? AND redeemed_time = ?",
+					code.Key, code.Name, common.RedemptionCodeStatusEnabled, now, 0, 0).
+				UpdateColumn("status", common.RedemptionCodeStatusRefunded)
+			if codeUpdate.Error != nil {
+				return codeUpdate.Error
+			}
+			if codeUpdate.RowsAffected != 1 {
+				return ErrAgentRefundUnavailable
+			}
 		}
 
 		balanceAfter := account.Balance + refundTotal
-		accountUpdate := tx.Model(&model.AgentAccount{}).
-			Where("id = ? AND version = ?", account.Id, account.Version).
-			UpdateColumn("balance", balanceAfter)
-		if accountUpdate.Error != nil {
-			return accountUpdate.Error
-		}
-		if accountUpdate.RowsAffected != 1 {
-			return errAgentAccountVersionConflict
+		if refundTotal > 0 {
+			accountUpdate := tx.Model(&model.AgentAccount{}).
+				Where("id = ? AND version = ?", account.Id, account.Version).
+				UpdateColumn("balance", balanceAfter)
+			if accountUpdate.Error != nil {
+				return accountUpdate.Error
+			}
+			if accountUpdate.RowsAffected != 1 {
+				return errAgentAccountVersionConflict
+			}
 		}
 
 		runningBalance := account.Balance
@@ -276,16 +277,6 @@ func RefundAgentCodes(input AgentRefundInput) (*AgentRefundResult, error) {
 			}
 		}
 
-		requestUpdate := tx.Model(&model.AgentRefundRequest{}).Where("id = ?", request.Id).
-			Updates(map[string]interface{}{
-				"fee_total": feeTotal, "refund_total": refundTotal, "balance_after": balanceAfter,
-			})
-		if requestUpdate.Error != nil {
-			return requestUpdate.Error
-		}
-		if requestUpdate.RowsAffected != 1 {
-			return ErrAgentRefundUnavailable
-		}
 		result = AgentRefundResult{
 			RequestID: request.Id, RedemptionIDs: append([]int(nil), ids...),
 			Fee: feeTotal, Refunded: refundTotal, BalanceAfter: balanceAfter,
@@ -304,42 +295,6 @@ func RefundAgentCodes(input AgentRefundInput) (*AgentRefundResult, error) {
 		return nil, ErrAgentAccountConflict
 	}
 	return nil, transactionErr
-}
-
-func ReconcileAgentAccount(agentUserID int) (*AgentReconciliation, error) {
-	if agentUserID <= 0 {
-		return nil, ErrAgentAccountNotFound
-	}
-	var account model.AgentAccount
-	if err := model.DB.Where("user_id = ?", agentUserID).First(&account).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, ErrAgentAccountNotFound
-		}
-		return nil, err
-	}
-	var logs []model.AgentCreditLog
-	if err := model.DB.Select("id", "delta").Where("agent_user_id = ?", agentUserID).Order("id ASC").Find(&logs).Error; err != nil {
-		return nil, err
-	}
-	ledgerSum := int64(0)
-	for _, log := range logs {
-		var err error
-		ledgerSum, err = checkedAgentRefundSignedAdd(ledgerSum, log.Delta)
-		if err != nil {
-			return nil, ErrAgentReconciliation
-		}
-	}
-	if ledgerSum == math.MinInt64 {
-		return nil, ErrAgentReconciliation
-	}
-	difference, err := checkedAgentRefundSignedAdd(account.Balance, -ledgerSum)
-	if err != nil {
-		return nil, ErrAgentReconciliation
-	}
-	return &AgentReconciliation{
-		AgentUserID: agentUserID, Balance: account.Balance, LedgerSum: ledgerSum,
-		Difference: difference, LedgerCount: int64(len(logs)), Matches: difference == 0,
-	}, nil
 }
 
 func canonicalAgentRefundRequest(input AgentRefundInput) ([]int, string, string, error) {
@@ -431,16 +386,6 @@ func validateAgentRefundOrder(order model.AgentPurchaseOrder) error {
 func checkedAgentRefundAdd(left int64, right int64) (int64, error) {
 	if left < 0 || right < 0 || left > math.MaxInt64-right {
 		return 0, ErrAgentBalanceOverflow
-	}
-	return left + right, nil
-}
-
-func checkedAgentRefundSignedAdd(left int64, right int64) (int64, error) {
-	if right > 0 && left > math.MaxInt64-right {
-		return 0, ErrAgentReconciliation
-	}
-	if right < 0 && left < math.MinInt64-right {
-		return 0, ErrAgentReconciliation
 	}
 	return left + right, nil
 }

@@ -115,7 +115,7 @@ func AdminReconcileAgentAccount(c *gin.Context) {
 	common.ApiSuccess(c, dto.AgentReconciliationResponse{
 		AgentUserId: result.AgentUserID, Balance: service.FormatAgentPoints(result.Balance),
 		LedgerSum: service.FormatAgentPoints(result.LedgerSum), Difference: service.FormatAgentPoints(result.Difference),
-		LedgerCount: result.LedgerCount, Matches: result.Matches,
+		LedgerCount: result.LedgerCount, LedgerContinuous: result.LedgerContinuous, Matches: result.Matches,
 	})
 }
 
@@ -401,6 +401,10 @@ func writeAgentAdminError(c *gin.Context, err error) {
 		common.ApiErrorMsg(c, "package codes are unavailable for refund")
 	case errors.Is(err, service.ErrAgentReconciliation):
 		common.ApiErrorMsg(c, "agent reconciliation failed")
+	case errors.Is(err, service.ErrAgentReconciliationUnstable):
+		common.ApiErrorMsg(c, "agent account changed during reconciliation; please retry")
+	case errors.Is(err, service.ErrAgentLedgerMismatch):
+		common.ApiErrorMsg(c, "agent ledger is inconsistent; financial operations are temporarily unavailable")
 	default:
 		common.SysError("agent administration failed: " + err.Error())
 		common.ApiErrorMsg(c, "agent account operation failed")

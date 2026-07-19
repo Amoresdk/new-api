@@ -51,10 +51,16 @@ func createPurchasableAgentFixture(t *testing.T, userID int, balance int64, dail
 	}
 	require.NoError(t, model.DB.Create(&user).Error)
 	account := model.AgentAccount{
-		UserId: userID, Status: model.AgentAccountStatusActive, Balance: balance,
+		UserId: userID, Status: model.AgentAccountStatusActive,
 		DailyCodeLimit: dailyLimit,
 	}
 	require.NoError(t, model.DB.Create(&account).Error)
+	_, err := AdjustAgentCredit(AgentCreditAdjustment{
+		AgentUserID: userID, OperatorUserID: 1, Amount: balance,
+		Direction: AgentCreditDirectionCredit, Reason: "test fixture funding",
+		IdempotencyKey: fmt.Sprintf("purchase-fixture-funding-%d", userID),
+	})
+	require.NoError(t, err)
 	plan := model.SubscriptionPlan{
 		Title: "Monthly Pro", Subtitle: "Snapshot subtitle", Enabled: true,
 		Currency: "CNY", DurationUnit: model.SubscriptionDurationMonth, DurationValue: 1,
@@ -113,7 +119,7 @@ func TestPurchaseAgentCodesCommitsExactBalanceOrderCodesAndLedger(t *testing.T) 
 	assert.Equal(t, int64(40000), account.Balance)
 	assert.Equal(t, 10, account.DailyCodeCount)
 	assert.Equal(t, time.Now().In(time.Local).Format("2006-01-02"), account.DailyCountDate)
-	assert.Equal(t, int64(1), account.Version)
+	assert.Equal(t, int64(2), account.Version)
 
 	var orders int64
 	require.NoError(t, model.DB.Model(&model.AgentPurchaseOrder{}).Count(&orders).Error)
@@ -127,6 +133,30 @@ func TestPurchaseAgentCodesCommitsExactBalanceOrderCodesAndLedger(t *testing.T) 
 	assert.Equal(t, int64(-60000), ledger.Delta)
 	assert.Equal(t, int64(100000), ledger.BalanceBefore)
 	assert.Equal(t, int64(40000), ledger.BalanceAfter)
+}
+
+func TestPurchaseAgentCodesRejectsLedgerMismatchWithoutMutation(t *testing.T) {
+	setupAgentPurchaseTest(t)
+	plan, _ := createPurchasableAgentFixture(t, 1201, 100000, 200)
+	require.NoError(t, model.DB.Model(&model.AgentAccount{}).Where("user_id = ?", 1201).
+		UpdateColumn("balance", int64(100001)).Error)
+	var before model.AgentAccount
+	require.NoError(t, model.DB.Where("user_id = ?", 1201).First(&before).Error)
+
+	_, err := PurchaseAgentCodes(AgentPurchaseInput{
+		AgentUserID: 1201, PlanID: plan.Id, Quantity: 1, IdempotencyKey: "purchase-mismatch",
+	})
+	assert.ErrorIs(t, err, ErrAgentLedgerMismatch)
+	var after model.AgentAccount
+	require.NoError(t, model.DB.Where("user_id = ?", 1201).First(&after).Error)
+	assert.Equal(t, before, after)
+	var orders, codes, purchases int64
+	require.NoError(t, model.DB.Model(&model.AgentPurchaseOrder{}).Count(&orders).Error)
+	require.NoError(t, model.DB.Model(&model.Redemption{}).Where("type = ?", common.RedemptionCodeTypeSubscription).Count(&codes).Error)
+	require.NoError(t, model.DB.Model(&model.AgentCreditLog{}).Where("event_type = ?", model.AgentCreditEventPurchase).Count(&purchases).Error)
+	assert.Zero(t, orders)
+	assert.Zero(t, codes)
+	assert.Zero(t, purchases)
 }
 
 func TestPurchaseAgentCodesValidatesServerStateAndLimits(t *testing.T) {
@@ -276,11 +306,11 @@ func TestPurchaseAgentCodesRejectsUndeliverablePlanBeforeAnyMutation(t *testing.
 			require.NoError(t, err)
 			assert.Equal(t, int64(100000), account.Balance)
 			assert.Zero(t, account.DailyCodeCount)
-			assert.Zero(t, account.Version)
+			assert.Equal(t, int64(1), account.Version)
 			var orderCount, codeCount, ledgerCount int64
 			require.NoError(t, model.DB.Model(&model.AgentPurchaseOrder{}).Count(&orderCount).Error)
 			require.NoError(t, model.DB.Model(&model.Redemption{}).Where("type = ?", common.RedemptionCodeTypeSubscription).Count(&codeCount).Error)
-			require.NoError(t, model.DB.Model(&model.AgentCreditLog{}).Count(&ledgerCount).Error)
+			require.NoError(t, model.DB.Model(&model.AgentCreditLog{}).Where("event_type = ?", model.AgentCreditEventPurchase).Count(&ledgerCount).Error)
 			assert.Zero(t, orderCount)
 			assert.Zero(t, codeCount)
 			assert.Zero(t, ledgerCount)
@@ -311,11 +341,11 @@ func TestPurchaseAgentCodesRollsBackAccountOrderAndCodesWhenLedgerFails(t *testi
 	require.NoError(t, err)
 	assert.Equal(t, int64(100000), account.Balance)
 	assert.Zero(t, account.DailyCodeCount)
-	assert.Zero(t, account.Version)
+	assert.Equal(t, int64(1), account.Version)
 	var orderCount, codeCount, ledgerCount int64
 	require.NoError(t, model.DB.Model(&model.AgentPurchaseOrder{}).Count(&orderCount).Error)
 	require.NoError(t, model.DB.Model(&model.Redemption{}).Where("type = ?", common.RedemptionCodeTypeSubscription).Count(&codeCount).Error)
-	require.NoError(t, model.DB.Model(&model.AgentCreditLog{}).Count(&ledgerCount).Error)
+	require.NoError(t, model.DB.Model(&model.AgentCreditLog{}).Where("event_type = ?", model.AgentCreditEventPurchase).Count(&ledgerCount).Error)
 	assert.Zero(t, orderCount)
 	assert.Zero(t, codeCount)
 	assert.Zero(t, ledgerCount)
