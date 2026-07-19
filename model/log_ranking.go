@@ -23,22 +23,53 @@ type UsageRankingQuery struct {
 }
 
 type UsageRankingGroupStat struct {
+	UserID           int                       `json:"-" gorm:"column:user_id"`
+	Username         string                    `json:"-" gorm:"column:username"`
+	Group            string                    `json:"group" gorm:"column:group"`
+	Quota            int64                     `json:"quota" gorm:"column:quota"`
+	RequestCount     int64                     `json:"request_count" gorm:"column:request_count"`
+	PromptTokens     int64                     `json:"prompt_tokens" gorm:"column:prompt_tokens"`
+	CompletionTokens int64                     `json:"completion_tokens" gorm:"column:completion_tokens"`
+	TotalTokens      int64                     `json:"total_tokens" gorm:"column:total_tokens"`
+	AverageUseTime   float64                   `json:"avg_use_time" gorm:"column:avg_use_time"`
+	StreamCount      int64                     `json:"stream_count" gorm:"column:stream_count"`
+	StreamRatio      float64                   `json:"stream_ratio" gorm:"-"`
+	ErrorCount       int64                     `json:"error_count" gorm:"-"`
+	ErrorRate        float64                   `json:"error_rate" gorm:"-"`
+	ModelCount       int64                     `json:"model_count" gorm:"column:model_count"`
+	TokenCount       int64                     `json:"token_count" gorm:"column:token_count"`
+	ChannelCount     int64                     `json:"channel_count" gorm:"column:channel_count"`
+	LastUsedAt       int64                     `json:"last_used_at" gorm:"column:last_used_at"`
+	ModelStats       []UsageRankingModelStat   `json:"model_stats" gorm:"-"`
+	ChannelStats     []UsageRankingChannelStat `json:"channel_stats" gorm:"-"`
+}
+
+type UsageRankingModelStat struct {
 	UserID           int     `json:"-" gorm:"column:user_id"`
 	Username         string  `json:"-" gorm:"column:username"`
-	Group            string  `json:"group" gorm:"column:group"`
+	Group            string  `json:"-" gorm:"column:group"`
+	ModelName        string  `json:"model_name" gorm:"column:model_name"`
 	Quota            int64   `json:"quota" gorm:"column:quota"`
+	QuotaRatio       float64 `json:"quota_ratio" gorm:"-"`
 	RequestCount     int64   `json:"request_count" gorm:"column:request_count"`
 	PromptTokens     int64   `json:"prompt_tokens" gorm:"column:prompt_tokens"`
 	CompletionTokens int64   `json:"completion_tokens" gorm:"column:completion_tokens"`
 	TotalTokens      int64   `json:"total_tokens" gorm:"column:total_tokens"`
-	AverageUseTime   float64 `json:"avg_use_time" gorm:"column:avg_use_time"`
-	StreamCount      int64   `json:"stream_count" gorm:"column:stream_count"`
-	StreamRatio      float64 `json:"stream_ratio" gorm:"-"`
-	ErrorCount       int64   `json:"error_count" gorm:"-"`
-	ErrorRate        float64 `json:"error_rate" gorm:"-"`
-	ModelCount       int64   `json:"model_count" gorm:"column:model_count"`
-	TokenCount       int64   `json:"token_count" gorm:"column:token_count"`
-	ChannelCount     int64   `json:"channel_count" gorm:"column:channel_count"`
+	LastUsedAt       int64   `json:"last_used_at" gorm:"column:last_used_at"`
+}
+
+type UsageRankingChannelStat struct {
+	UserID           int     `json:"-" gorm:"column:user_id"`
+	Username         string  `json:"-" gorm:"column:username"`
+	Group            string  `json:"-" gorm:"column:group"`
+	ChannelID        int     `json:"channel_id" gorm:"column:channel_id"`
+	ChannelName      string  `json:"channel_name" gorm:"-"`
+	Quota            int64   `json:"quota" gorm:"column:quota"`
+	QuotaRatio       float64 `json:"quota_ratio" gorm:"-"`
+	RequestCount     int64   `json:"request_count" gorm:"column:request_count"`
+	PromptTokens     int64   `json:"prompt_tokens" gorm:"column:prompt_tokens"`
+	CompletionTokens int64   `json:"completion_tokens" gorm:"column:completion_tokens"`
+	TotalTokens      int64   `json:"total_tokens" gorm:"column:total_tokens"`
 	LastUsedAt       int64   `json:"last_used_at" gorm:"column:last_used_at"`
 }
 
@@ -248,6 +279,79 @@ func GetUsageRanking(query UsageRankingQuery) (UsageRankingResult, error) {
 		return result, err
 	}
 
+	modelQuery := LOG_DB.Table("logs").Select(`user_id,
+		username,
+		` + logGroupCol + ` AS ` + logGroupCol + `,
+		model_name,
+		COALESCE(SUM(quota), 0) AS quota,
+		COUNT(*) AS request_count,
+		COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
+		COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
+		COALESCE(SUM(prompt_tokens), 0) + COALESCE(SUM(completion_tokens), 0) AS total_tokens,
+		MAX(created_at) AS last_used_at`)
+	modelQuery, err = applyUsageRankingFilters(modelQuery, query, LogTypeConsume)
+	if err != nil {
+		return result, err
+	}
+	modelQuery = applyUsageRankingUserScope(modelQuery, users)
+	var modelRows []UsageRankingModelStat
+	if err = modelQuery.Group("user_id, username, " + logGroupCol + ", model_name").
+		Order("quota DESC, request_count DESC, model_name ASC").
+		Scan(&modelRows).Error; err != nil {
+		return result, err
+	}
+
+	channelQuery := LOG_DB.Table("logs").Select(`user_id,
+		username,
+		` + logGroupCol + ` AS ` + logGroupCol + `,
+		channel_id,
+		COALESCE(SUM(quota), 0) AS quota,
+		COUNT(*) AS request_count,
+		COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
+		COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
+		COALESCE(SUM(prompt_tokens), 0) + COALESCE(SUM(completion_tokens), 0) AS total_tokens,
+		MAX(created_at) AS last_used_at`)
+	channelQuery, err = applyUsageRankingFilters(channelQuery, query, LogTypeConsume)
+	if err != nil {
+		return result, err
+	}
+	channelQuery = applyUsageRankingUserScope(channelQuery, users)
+	var channelRows []UsageRankingChannelStat
+	if err = channelQuery.Group("user_id, username, " + logGroupCol + ", channel_id").
+		Order("quota DESC, request_count DESC, channel_id ASC").
+		Scan(&channelRows).Error; err != nil {
+		return result, err
+	}
+
+	channelIDs := make([]int, 0)
+	channelIDSet := make(map[int]struct{})
+	for _, row := range channelRows {
+		if row.ChannelID <= 0 {
+			continue
+		}
+		if _, ok := channelIDSet[row.ChannelID]; ok {
+			continue
+		}
+		channelIDSet[row.ChannelID] = struct{}{}
+		channelIDs = append(channelIDs, row.ChannelID)
+	}
+	channelNameByID := make(map[int]string, len(channelIDs))
+	if len(channelIDs) > 0 {
+		var channels []struct {
+			ID   int    `gorm:"column:id"`
+			Name string `gorm:"column:name"`
+		}
+		if err = DB.Table("channels").Select("id, name").Where("id IN ?", channelIDs).Find(&channels).Error; err != nil {
+			return result, err
+		}
+		for _, channel := range channels {
+			channelNameByID[channel.ID] = channel.Name
+		}
+	}
+	for i := range channelRows {
+		channelRows[i].ChannelName = channelNameByID[channelRows[i].ChannelID]
+	}
+
 	errorQuery, err := applyUsageRankingFilters(LOG_DB.Table("logs"), query, LogTypeError)
 	if err != nil {
 		return result, err
@@ -268,10 +372,40 @@ func GetUsageRanking(query UsageRankingQuery) (UsageRankingResult, error) {
 		groupErrors[usageRankingGroupIdentity{UserID: row.UserID, Username: row.Username, Group: row.Group}] = row.ErrorCount
 	}
 
+	groupQuota := make(map[usageRankingGroupIdentity]int64, len(groupRows))
+	for _, row := range groupRows {
+		groupQuota[usageRankingGroupIdentity{UserID: row.UserID, Username: row.Username, Group: row.Group}] = row.Quota
+	}
+	modelStats := make(map[usageRankingGroupIdentity][]UsageRankingModelStat, len(groupRows))
+	for i := range modelRows {
+		identity := usageRankingGroupIdentity{UserID: modelRows[i].UserID, Username: modelRows[i].Username, Group: modelRows[i].Group}
+		if groupQuota[identity] > 0 {
+			modelRows[i].QuotaRatio = float64(modelRows[i].Quota) / float64(groupQuota[identity])
+		}
+		modelStats[identity] = append(modelStats[identity], modelRows[i])
+	}
+	channelStats := make(map[usageRankingGroupIdentity][]UsageRankingChannelStat, len(groupRows))
+	for i := range channelRows {
+		identity := usageRankingGroupIdentity{UserID: channelRows[i].UserID, Username: channelRows[i].Username, Group: channelRows[i].Group}
+		if groupQuota[identity] > 0 {
+			channelRows[i].QuotaRatio = float64(channelRows[i].Quota) / float64(groupQuota[identity])
+		}
+		channelStats[identity] = append(channelStats[identity], channelRows[i])
+	}
+
 	groupStats := make(map[usageRankingIdentity][]UsageRankingGroupStat, len(users))
 	for i := range groupRows {
 		identity := usageRankingIdentity{UserID: groupRows[i].UserID, Username: groupRows[i].Username}
-		groupRows[i].ErrorCount = groupErrors[usageRankingGroupIdentity{UserID: groupRows[i].UserID, Username: groupRows[i].Username, Group: groupRows[i].Group}]
+		groupIdentity := usageRankingGroupIdentity{UserID: groupRows[i].UserID, Username: groupRows[i].Username, Group: groupRows[i].Group}
+		groupRows[i].ErrorCount = groupErrors[groupIdentity]
+		groupRows[i].ModelStats = []UsageRankingModelStat{}
+		groupRows[i].ChannelStats = []UsageRankingChannelStat{}
+		if stats, ok := modelStats[groupIdentity]; ok {
+			groupRows[i].ModelStats = stats
+		}
+		if stats, ok := channelStats[groupIdentity]; ok {
+			groupRows[i].ChannelStats = stats
+		}
 		if groupRows[i].RequestCount > 0 {
 			groupRows[i].StreamRatio = float64(groupRows[i].StreamCount) / float64(groupRows[i].RequestCount)
 		}

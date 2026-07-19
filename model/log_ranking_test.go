@@ -19,6 +19,7 @@ func setupUsageRankingTestDB(t *testing.T) {
 	require.NoError(t, err)
 	sqlDB.SetMaxOpenConns(1)
 	require.NoError(t, db.AutoMigrate(&Log{}))
+	require.NoError(t, db.Exec("CREATE TABLE channels (id INTEGER PRIMARY KEY, name TEXT NOT NULL)").Error)
 
 	originalDB := DB
 	originalLogDB := LOG_DB
@@ -110,6 +111,43 @@ func TestGetUsageRankingAggregatesAndPaginates(t *testing.T) {
 	assert.Equal(t, "default", alice.GroupStats[1].Group)
 	assert.Equal(t, int64(80), alice.GroupStats[1].Quota)
 	assert.Equal(t, int64(0), alice.GroupStats[1].ErrorCount)
+}
+
+func TestGetUsageRankingIncludesModelAndChannelBreakdowns(t *testing.T) {
+	setupUsageRankingTestDB(t)
+	require.NoError(t, DB.Exec("INSERT INTO channels (id, name) VALUES (?, ?), (?, ?)", 1, "east", 2, "west").Error)
+	insertUsageRankingLogs(t,
+		Log{UserId: 10, Username: "alice", CreatedAt: 120, Type: LogTypeConsume, Quota: 60, PromptTokens: 8, CompletionTokens: 2, ModelName: "model-a", Group: "vip", ChannelId: 1},
+		Log{UserId: 10, Username: "alice", CreatedAt: 130, Type: LogTypeConsume, Quota: 20, PromptTokens: 4, CompletionTokens: 1, ModelName: "model-a", Group: "vip", ChannelId: 2},
+		Log{UserId: 10, Username: "alice", CreatedAt: 140, Type: LogTypeConsume, Quota: 20, PromptTokens: 10, CompletionTokens: 5, ModelName: "model-b", Group: "vip", ChannelId: 2},
+	)
+
+	result, err := GetUsageRanking(UsageRankingQuery{StartTimestamp: 100, EndTimestamp: 200})
+
+	require.NoError(t, err)
+	require.Len(t, result.Items, 1)
+	require.Len(t, result.Items[0].GroupStats, 1)
+	group := result.Items[0].GroupStats[0]
+	require.Len(t, group.ModelStats, 2)
+	assert.Equal(t, "model-a", group.ModelStats[0].ModelName)
+	assert.Equal(t, int64(80), group.ModelStats[0].Quota)
+	assert.Equal(t, int64(2), group.ModelStats[0].RequestCount)
+	assert.Equal(t, int64(15), group.ModelStats[0].TotalTokens)
+	assert.InDelta(t, 0.8, group.ModelStats[0].QuotaRatio, 0.0001)
+	assert.Equal(t, "model-b", group.ModelStats[1].ModelName)
+	assert.InDelta(t, 0.2, group.ModelStats[1].QuotaRatio, 0.0001)
+
+	require.Len(t, group.ChannelStats, 2)
+	assert.Equal(t, 1, group.ChannelStats[0].ChannelID)
+	assert.Equal(t, "east", group.ChannelStats[0].ChannelName)
+	assert.Equal(t, int64(60), group.ChannelStats[0].Quota)
+	assert.InDelta(t, 0.6, group.ChannelStats[0].QuotaRatio, 0.0001)
+	assert.Equal(t, 2, group.ChannelStats[1].ChannelID)
+	assert.Equal(t, "west", group.ChannelStats[1].ChannelName)
+	assert.Equal(t, int64(40), group.ChannelStats[1].Quota)
+	assert.Equal(t, int64(2), group.ChannelStats[1].RequestCount)
+	assert.Equal(t, int64(20), group.ChannelStats[1].TotalTokens)
+	assert.InDelta(t, 0.4, group.ChannelStats[1].QuotaRatio, 0.0001)
 }
 
 func TestGetUsageRankingSortsByRequestsAndAssignsGlobalRank(t *testing.T) {
