@@ -206,7 +206,8 @@ func (redemption *Redemption) SelectUpdate() error {
 		return result.Error
 	}
 	if result.RowsAffected == 0 {
-		return gorm.ErrRecordNotFound
+		var existing Redemption
+		return DB.Select("id").Where("id = ? AND type = ?", redemption.Id, common.RedemptionCodeTypeQuota).First(&existing).Error
 	}
 	return nil
 }
@@ -219,7 +220,8 @@ func (redemption *Redemption) Update() error {
 		return result.Error
 	}
 	if result.RowsAffected == 0 {
-		return gorm.ErrRecordNotFound
+		var existing Redemption
+		return DB.Select("id").Where("id = ? AND type = ?", redemption.Id, common.RedemptionCodeTypeQuota).First(&existing).Error
 	}
 	return nil
 }

@@ -173,17 +173,15 @@ func TestAgentModelDefaultsAreNormalizedInCode(t *testing.T) {
 	})
 
 	account := AgentAccount{UserId: 301, Status: AgentAccountStatusActive}
-	require.NoError(t, account.BeforeCreate(DB))
-	assert.Equal(t, DefaultAgentDailyCodeLimit, account.DailyCodeLimit)
 	require.NoError(t, DB.Create(&account).Error)
+	assert.Equal(t, DefaultAgentDailyCodeLimit, account.DailyCodeLimit)
 	var storedAccount AgentAccount
 	require.NoError(t, DB.First(&storedAccount, account.Id).Error)
 	assert.Equal(t, DefaultAgentDailyCodeLimit, storedAccount.DailyCodeLimit)
 
 	offer := AgentPlanOffer{PlanId: 401, Enabled: true}
-	require.NoError(t, offer.BeforeCreate(DB))
-	assert.Equal(t, DefaultAgentCodeValidDays, offer.CodeValidDays)
 	require.NoError(t, DB.Create(&offer).Error)
+	assert.Equal(t, DefaultAgentCodeValidDays, offer.CodeValidDays)
 	var storedOffer AgentPlanOffer
 	require.NoError(t, DB.First(&storedOffer, offer.Id).Error)
 	assert.Equal(t, DefaultAgentCodeValidDays, storedOffer.CodeValidDays)

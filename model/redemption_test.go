@@ -269,3 +269,48 @@ func TestQuotaRedemptionPathsExcludeSubscriptionCodes(t *testing.T) {
 		Type:   common.RedemptionCodeTypeSubscription,
 	}).Insert())
 }
+
+func TestQuotaRedemptionNoOpUpdatesRemainAllowed(t *testing.T) {
+	require.NoError(t, DB.AutoMigrate(&Redemption{}))
+	require.NoError(t, DB.Session(&gorm.Session{AllowGlobalUpdate: true}).Unscoped().Delete(&Redemption{}).Error)
+	t.Cleanup(func() {
+		require.NoError(t, DB.Session(&gorm.Session{AllowGlobalUpdate: true}).Unscoped().Delete(&Redemption{}).Error)
+	})
+
+	quotaCode := &Redemption{
+		Key:          "30000000000000000000000000000001",
+		Name:         "unchanged-quota-code",
+		Status:       common.RedemptionCodeStatusEnabled,
+		Quota:        100,
+		RedeemedTime: 10,
+	}
+	require.NoError(t, DB.Create(quotaCode).Error)
+	const forceNoOpRowsCallback = "test:force-redemption-update-rows-affected-zero"
+	require.NoError(t, DB.Callback().Update().After("gorm:update").Register(forceNoOpRowsCallback, func(tx *gorm.DB) {
+		tx.RowsAffected = 0
+	}))
+	t.Cleanup(func() {
+		require.NoError(t, DB.Callback().Update().Remove(forceNoOpRowsCallback))
+	})
+	require.NoError(t, quotaCode.SelectUpdate())
+	require.NoError(t, quotaCode.Update())
+
+	packageCode := &Redemption{
+		Key:    "30000000000000000000000000000002",
+		Name:   "protected-package-code",
+		Status: common.RedemptionCodeStatusEnabled,
+		Type:   common.RedemptionCodeTypeSubscription,
+	}
+	require.NoError(t, DB.Create(packageCode).Error)
+	packageCode.Status = common.RedemptionCodeStatusDisabled
+	err := packageCode.SelectUpdate()
+	require.ErrorIs(t, err, gorm.ErrRecordNotFound)
+	packageCode.Name = "mutated-package-code"
+	err = packageCode.Update()
+	require.ErrorIs(t, err, gorm.ErrRecordNotFound)
+
+	var storedPackage Redemption
+	require.NoError(t, DB.First(&storedPackage, packageCode.Id).Error)
+	assert.Equal(t, "protected-package-code", storedPackage.Name)
+	assert.Equal(t, common.RedemptionCodeStatusEnabled, storedPackage.Status)
+}
