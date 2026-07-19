@@ -25,7 +25,12 @@ import { useTranslation } from 'react-i18next'
 import { SectionPageLayout } from '@/components/layout'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
+import { Card, CardContent } from '@/components/ui/card'
+import { Skeleton } from '@/components/ui/skeleton'
+import { Switch } from '@/components/ui/switch'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { useUpdateOption } from '@/features/system-settings/hooks/use-update-option'
+import { useStatus } from '@/hooks/use-status'
 import { useAuthStore } from '@/stores/auth-store'
 
 import { AgentCodesTable } from './components/agent-codes-table'
@@ -36,6 +41,7 @@ import { AgentsTable } from './components/agents-table'
 import {
   agentAdminQueryKeys,
   getAgentAdminAccess,
+  getAgentSystemSwitchState,
   type AgentAdminSearch,
 } from './lib/admin'
 
@@ -49,8 +55,15 @@ export function AgentAdmin(props: AgentAdminProps) {
   const queryClient = useQueryClient()
   const [refreshing, setRefreshing] = useState(false)
   const user = useAuthStore((state) => state.auth.user)
+  const status = useStatus()
+  const updateOption = useUpdateOption()
   const access = getAgentAdminAccess(user?.role)
   const scope = user?.id ?? 0
+  const systemSwitchState = getAgentSystemSwitchState({
+    canMutate: access.canMutate,
+    hasAuthoritativeStatus: status.hasAuthoritativeData,
+    statusError: status.isError,
+  })
   const changeTab = (tab: AgentAdminSearch['tab']) =>
     props.onSearchChange({
       tab,
@@ -69,6 +82,19 @@ export function AgentAdmin(props: AgentAdminProps) {
       })
     } finally {
       setRefreshing(false)
+    }
+  }
+  const setAgentSystemEnabled = async (enabled: boolean) => {
+    try {
+      const result = await updateOption.mutateAsync({
+        key: 'agent_setting.enabled',
+        value: enabled,
+      })
+      if (result.success) {
+        await status.refetch()
+      }
+    } catch {
+      // useUpdateOption owns the user-facing error toast.
     }
   }
 
@@ -93,6 +119,49 @@ export function AgentAdmin(props: AgentAdminProps) {
       </SectionPageLayout.Actions>
       <SectionPageLayout.Content>
         <div className='flex flex-col gap-4'>
+          {systemSwitchState !== 'hidden' && (
+            <Card>
+              <CardContent className='flex flex-col gap-4 p-4 sm:flex-row sm:items-center sm:justify-between sm:p-5'>
+                <div className='flex flex-col gap-1'>
+                  <h2 className='font-medium'>{t('Agent system')}</h2>
+                  <p className='text-muted-foreground text-sm'>
+                    {t(
+                      'Enable the agent workspace, package offers, and redemption-code sales.'
+                    )}
+                  </p>
+                </div>
+                {systemSwitchState === 'loading' && (
+                  <Skeleton className='h-6 w-11' />
+                )}
+                {systemSwitchState === 'error' && (
+                  <Button
+                    type='button'
+                    variant='outline'
+                    onClick={() => status.refetch()}
+                  >
+                    {t('Retry')}
+                  </Button>
+                )}
+                {systemSwitchState === 'ready' && (
+                  <div className='flex items-center gap-3'>
+                    <span className='text-muted-foreground text-sm'>
+                      {status.status?.agent_enabled
+                        ? t('Enabled')
+                        : t('Disabled')}
+                    </span>
+                    <Switch
+                      aria-label={t('Agent system')}
+                      checked={status.status?.agent_enabled === true}
+                      disabled={updateOption.isPending || status.isFetching}
+                      onCheckedChange={(enabled) => {
+                        void setAgentSystemEnabled(enabled)
+                      }}
+                    />
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          )}
           {!access.canMutate && (
             <Alert>
               <AlertTitle>{t('Read-only agent administration')}</AlertTitle>

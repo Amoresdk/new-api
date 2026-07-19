@@ -90,6 +90,16 @@ export function getAgentAdminAccess(role: number | undefined): {
   }
 }
 
+export function getAgentSystemSwitchState(input: {
+  canMutate: boolean
+  hasAuthoritativeStatus: boolean
+  statusError: boolean
+}): 'hidden' | 'loading' | 'error' | 'ready' {
+  if (!input.canMutate) return 'hidden'
+  if (input.hasAuthoritativeStatus) return 'ready'
+  return input.statusError ? 'error' : 'loading'
+}
+
 export type CreditAdjustmentPayload = {
   amount: string
   direction: 'credit' | 'debit'

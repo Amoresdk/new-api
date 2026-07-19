@@ -75,6 +75,7 @@ export function Wallet(props: WalletProps) {
   const [selectedCreemProduct, setSelectedCreemProduct] =
     useState<CreemProduct | null>(null)
   const [showSubscriptionPanel, setShowSubscriptionPanel] = useState(true)
+  const [subscriptionRefreshToken, setSubscriptionRefreshToken] = useState(0)
 
   const { status } = useStatus()
   const { currency } = useSystemConfig()
@@ -99,7 +100,6 @@ export function Wallet(props: WalletProps) {
     transferQuota,
     transferring,
   } = useAffiliate()
-  const { redeeming, redeemCode } = useRedemption()
   const { processing: creemProcessing, processCreemPayment } = useCreemPayment()
   const { processWaffoPayment } = useWaffoPayment()
   const { processing: pancakeProcessing, processWaffoPancakePayment } =
@@ -120,6 +120,15 @@ export function Wallet(props: WalletProps) {
       setUserLoading(false)
     }
   }, [])
+
+  const refreshSubscriptions = useCallback(() => {
+    setSubscriptionRefreshToken((current) => current + 1)
+  }, [])
+
+  const { redeeming, redeemCode } = useRedemption({
+    refreshUser: fetchUser,
+    refreshSubscriptions,
+  })
 
   useEffect(() => {
     fetchUser()
@@ -205,7 +214,6 @@ export function Wallet(props: WalletProps) {
     const success = await redeemCode(redemptionCode)
     if (success) {
       setRedemptionCode('')
-      await fetchUser()
     }
   }
 
@@ -313,6 +321,7 @@ export function Wallet(props: WalletProps) {
                 onAvailabilityChange={handleSubscriptionAvailabilityChange}
                 userQuota={user?.quota}
                 onPurchaseSuccess={fetchUser}
+                refreshToken={subscriptionRefreshToken}
               />
             </div>
 

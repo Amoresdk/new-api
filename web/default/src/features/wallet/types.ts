@@ -20,6 +20,12 @@ For commercial licensing, please contact support@quantumnous.com
 // Wallet Type Definitions
 // ============================================================================
 
+import type {
+  ApiResult as AgentApiResult,
+  TypedRedemption,
+  TypedRedemptionRequest,
+} from '@/features/agents/types'
+
 /**
  * Generic API response
  */
@@ -33,7 +39,7 @@ export interface ApiResponse<T = unknown> {
  * Standard API response types
  */
 export type TopupInfoResponse = ApiResponse<TopupInfo>
-export type RedemptionResponse = ApiResponse<number>
+export type RedemptionResponse = AgentApiResult<TypedRedemption>
 export type AmountResponse = ApiResponse<string>
 export type PaymentResponse = ApiResponse<Record<string, unknown>> & {
   url?: string
@@ -171,10 +177,7 @@ export interface PresetAmount {
 /**
  * Redemption code request
  */
-export interface RedemptionRequest {
-  /** Redemption code key */
-  key: string
-}
+export type RedemptionRequest = TypedRedemptionRequest
 
 /**
  * Payment request parameters

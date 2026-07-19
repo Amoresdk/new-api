@@ -32,6 +32,7 @@ import {
   createCreditAttempt,
   getAgentAdminAccess,
   getAgentAdminInvalidationPlan,
+  getAgentSystemSwitchState,
   getAdminRefundSelection,
   projectAgentBalance,
   validateAgentOfferDraft,
@@ -141,6 +142,41 @@ describe('agent administration access', () => {
       canRead: true,
       canMutate: true,
     })
+  })
+
+  test('never exposes the RootAuth feature switch to ordinary administrators', () => {
+    assert.equal(
+      getAgentSystemSwitchState({
+        canMutate: false,
+        hasAuthoritativeStatus: true,
+        statusError: false,
+      }),
+      'hidden'
+    )
+    assert.equal(
+      getAgentSystemSwitchState({
+        canMutate: true,
+        hasAuthoritativeStatus: false,
+        statusError: false,
+      }),
+      'loading'
+    )
+    assert.equal(
+      getAgentSystemSwitchState({
+        canMutate: true,
+        hasAuthoritativeStatus: false,
+        statusError: true,
+      }),
+      'error'
+    )
+    assert.equal(
+      getAgentSystemSwitchState({
+        canMutate: true,
+        hasAuthoritativeStatus: true,
+        statusError: true,
+      }),
+      'ready'
+    )
   })
 })
 
