@@ -70,6 +70,13 @@ func SetApiRouter(router *gin.Engine) {
 			agentAdminMutationRoute.POST("/agents/:user_id/credit-adjustments", controller.RootAdjustAgentCredit)
 			agentAdminMutationRoute.PUT("/offers/:plan_id", controller.RootUpsertAgentPlanOffer)
 		}
+		agentRoute := apiRouter.Group("/agent")
+		agentRoute.Use(middleware.UserAuth())
+		{
+			agentRoute.GET("/overview", controller.GetAgentOverview)
+			agentRoute.GET("/offers", controller.GetAgentOffers)
+			agentRoute.POST("/orders", middleware.CriticalRateLimit(), controller.CreateAgentOrder)
+		}
 
 		apiRouter.POST("/stripe/webhook", anonymousRequestBodyLimit, controller.StripeWebhook)
 		apiRouter.POST("/creem/webhook", anonymousRequestBodyLimit, controller.CreemWebhook)
