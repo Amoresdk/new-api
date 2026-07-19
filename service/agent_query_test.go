@@ -2,6 +2,7 @@ package service
 
 import (
 	"bytes"
+	"encoding/csv"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -30,6 +32,8 @@ type agentQueryFixture struct {
 func setupAgentQueryTest(t *testing.T) agentQueryFixture {
 	t.Helper()
 	originalDB := model.DB
+	originalEnabled := operation_setting.GetAgentSetting().Enabled
+	operation_setting.GetAgentSetting().Enabled = true
 	dsn := "file:" + filepath.Join(t.TempDir(), "agent-query.db") + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)"
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	require.NoError(t, err)
@@ -40,6 +44,7 @@ func setupAgentQueryTest(t *testing.T) agentQueryFixture {
 	model.DB = db
 	t.Cleanup(func() {
 		model.DB = originalDB
+		operation_setting.GetAgentSetting().Enabled = originalEnabled
 		sqlDB, dbErr := db.DB()
 		require.NoError(t, dbErr)
 		require.NoError(t, sqlDB.Close())
@@ -58,7 +63,7 @@ func setupAgentQueryTest(t *testing.T) agentQueryFixture {
 	}
 
 	planOne := model.SubscriptionPlan{Title: "月度专业版", Enabled: true}
-	planTwo := model.SubscriptionPlan{Title: "=Admin Formula", Enabled: true}
+	planTwo := model.SubscriptionPlan{Title: "=套餐,\"管理员\"\n第二行", Enabled: true}
 	require.NoError(t, db.Create(&planOne).Error)
 	require.NoError(t, db.Create(&planTwo).Error)
 	now := time.Now().Unix()
@@ -194,6 +199,31 @@ func TestListAgentAdminQueriesSupportFiltersAndStrictValidation(t *testing.T) {
 	assert.ErrorIs(t, err, ErrAgentQueryInvalid)
 }
 
+func TestListAgentQueriesRespectFeatureSwitchWithoutBlockingAdminReads(t *testing.T) {
+	fixture := setupAgentQueryTest(t)
+	operation_setting.GetAgentSetting().Enabled = false
+
+	_, _, err := ListAgentOrders(fixture.agentOne, AgentOrderQuery{Limit: 10})
+	assert.ErrorIs(t, err, ErrAgentFeatureDisabled)
+	_, _, err = ListAgentCodes(fixture.agentOne, AgentCodeQuery{Limit: 10, Now: fixture.now})
+	assert.ErrorIs(t, err, ErrAgentFeatureDisabled)
+	_, _, err = ListAgentCreditLogs(fixture.agentOne, AgentCreditLogQuery{Limit: 10})
+	assert.ErrorIs(t, err, ErrAgentFeatureDisabled)
+	var output bytes.Buffer
+	err = ExportAgentCodes(&output, AgentCodeQuery{AgentUserID: fixture.agentOne, Now: fixture.now})
+	assert.ErrorIs(t, err, ErrAgentFeatureDisabled)
+	assert.Zero(t, output.Len())
+
+	adminOrders, orderTotal, err := ListAdminAgentOrders(AgentOrderQuery{AgentUserID: fixture.agentOne, Limit: 10})
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), orderTotal)
+	assert.Len(t, adminOrders, 1)
+	adminCodes, codeTotal, err := ListAdminAgentCodes(AgentCodeQuery{AgentUserID: fixture.agentOne, Limit: 10, Now: fixture.now})
+	require.NoError(t, err)
+	assert.Equal(t, int64(4), codeTotal)
+	assert.Len(t, adminCodes, 4)
+}
+
 func TestExportAgentCodesScopesOwnerEscapesFormulaAndUsesStableUTF8Columns(t *testing.T) {
 	fixture := setupAgentQueryTest(t)
 	var output bytes.Buffer
@@ -211,14 +241,26 @@ func TestExportAgentCodesScopesOwnerEscapesFormulaAndUsesStableUTF8Columns(t *te
 	assert.NotContains(t, csvText, "@other-code")
 	assert.NotContains(t, csvText, "@other-order")
 
+	reader := csv.NewReader(strings.NewReader(csvText))
+	records, err := reader.ReadAll()
+	require.NoError(t, err)
+	require.Len(t, records, 5)
+	assert.Equal(t, []string{"code", "plan", "order_no", "status", "created_at", "expired_at", "redeemed_at"}, records[0])
+	for _, record := range records {
+		assert.Len(t, record, 7)
+	}
+
 	var otherOutput bytes.Buffer
 	err = ExportAgentCodes(&otherOutput, AgentCodeQuery{
 		AgentUserID: fixture.agentTwo, Limit: AgentCodeExportMaxRows, Now: fixture.now,
 	})
 	require.NoError(t, err)
-	assert.Contains(t, otherOutput.String(), "'@other-code")
-	assert.Contains(t, otherOutput.String(), "'=Admin Formula")
-	assert.Contains(t, otherOutput.String(), "'@other-order")
+	otherReader := csv.NewReader(strings.NewReader(otherOutput.String()))
+	otherRecords, err := otherReader.ReadAll()
+	require.NoError(t, err)
+	require.Len(t, otherRecords, 2)
+	assert.Equal(t, []string{"'@other-code", "'=套餐,\"管理员\"\n第二行", "'@other-order", "unused", formatAgentExportTime(fixture.now - 40), formatAgentExportTime(fixture.now + 3600), ""}, otherRecords[1])
+	assert.Len(t, otherRecords[1], 7)
 }
 
 func TestExportAgentCodesRejectsDisabledAgentAndMaximumOverflowBeforeWriting(t *testing.T) {
@@ -234,11 +276,23 @@ func TestExportAgentCodesRejectsDisabledAgentAndMaximumOverflowBeforeWriting(t *
 	require.NoError(t, err, "disabled agents retain read-only access to sold inventory history")
 	assert.Equal(t, int64(4), total)
 	assert.Len(t, history, 4)
+	for _, code := range history {
+		if code.Status == AgentCodeStatusUnused {
+			assert.Empty(t, code.Code)
+			assert.False(t, code.CodeVisible)
+		} else {
+			assert.True(t, code.CodeVisible)
+		}
+	}
+	historyJSON, err := common.Marshal(history)
+	require.NoError(t, err)
+	assert.NotContains(t, string(historyJSON), "unused-code", "disabled agent must not recover a currently redeemable code")
 
 	require.NoError(t, model.DB.Model(&model.AgentAccount{}).
 		Where("user_id = ?", fixture.agentOne).Update("status", model.AgentAccountStatusActive).Error)
-	bulk := make([]model.Redemption, 0, AgentCodeExportMaxRows)
-	for index := 0; index < AgentCodeExportMaxRows; index++ {
+	bulkCount := AgentCodeExportMaxRows - 3 // fixture has four codes: exact total is 10001
+	bulk := make([]model.Redemption, 0, bulkCount)
+	for index := 0; index < bulkCount; index++ {
 		bulk = append(bulk, model.Redemption{
 			UserId: fixture.agentOne, AgentUserId: fixture.agentOne,
 			AgentOrderId: fixture.orderOne.Id, SubscriptionPlanId: fixture.planOne.Id,
@@ -253,4 +307,45 @@ func TestExportAgentCodesRejectsDisabledAgentAndMaximumOverflowBeforeWriting(t *
 	err = ExportAgentCodes(&overflow, AgentCodeQuery{AgentUserID: fixture.agentOne, Now: fixture.now})
 	assert.True(t, errors.Is(err, ErrAgentExportLimitExceeded))
 	assert.Zero(t, overflow.Len(), "export must fail before emitting a partial file")
+}
+
+func TestExportAgentCodesWritesNothingOnGrowthOrDatabaseScanFailure(t *testing.T) {
+	fixture := setupAgentQueryTest(t)
+	originalLoader := loadAgentCodeExportRows
+	t.Cleanup(func() { loadAgentCodeExportRows = originalLoader })
+
+	loadAgentCodeExportRows = func(*gorm.DB) ([]agentCodeRow, error) {
+		return make([]agentCodeRow, AgentCodeExportMaxRows+1), nil
+	}
+	var growth bytes.Buffer
+	err := ExportAgentCodes(&growth, AgentCodeQuery{AgentUserID: fixture.agentOne, Now: fixture.now})
+	assert.ErrorIs(t, err, ErrAgentExportLimitExceeded)
+	assert.Zero(t, growth.Len(), "inventory growth to 10001 rows must be detected before CSV output")
+
+	expected := errors.New("injected database scan failure")
+	loadAgentCodeExportRows = func(*gorm.DB) ([]agentCodeRow, error) {
+		return nil, expected
+	}
+	var failed bytes.Buffer
+	err = ExportAgentCodes(&failed, AgentCodeQuery{AgentUserID: fixture.agentOne, Now: fixture.now})
+	assert.ErrorIs(t, err, expected)
+	assert.Zero(t, failed.Len(), "database errors must occur before CSV output")
+}
+
+func TestListAgentCodesTreatsExpiryAtCurrentSecondAsExpiredWithoutMutation(t *testing.T) {
+	fixture := setupAgentQueryTest(t)
+	require.NoError(t, model.DB.Model(&model.Redemption{}).
+		Where("key = ?", "unused-code").Update("expired_time", fixture.now).Error)
+
+	codes, total, err := ListAgentCodes(fixture.agentOne, AgentCodeQuery{
+		Status: AgentCodeStatusExpired, Limit: 100, Now: fixture.now,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), total)
+	assert.Len(t, codes, 2)
+	assert.Contains(t, []string{codes[0].Code, codes[1].Code}, "unused-code")
+
+	var stored model.Redemption
+	require.NoError(t, model.DB.Where("key = ?", "unused-code").First(&stored).Error)
+	assert.Equal(t, common.RedemptionCodeStatusEnabled, stored.Status)
 }

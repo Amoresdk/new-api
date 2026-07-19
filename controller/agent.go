@@ -317,7 +317,7 @@ func writeAgentError(c *gin.Context, err error) {
 	case errors.Is(err, service.ErrAgentExportLimitExceeded):
 		common.ApiErrorMsg(c, "code export exceeds the 10000 row limit")
 	default:
-		common.SysError("agent purchase failed: " + err.Error())
-		common.ApiErrorMsg(c, "agent purchase failed")
+		common.SysError("agent operation failed: " + err.Error())
+		common.ApiErrorMsg(c, "agent operation failed")
 	}
 }

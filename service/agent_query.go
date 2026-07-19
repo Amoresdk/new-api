@@ -9,6 +9,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"gorm.io/gorm"
 )
 
@@ -83,10 +84,13 @@ type AgentCodeRecord struct {
 	PlanID      int    `json:"plan_id"`
 	PlanTitle   string `json:"plan_title"`
 	Status      string `json:"status"`
-	UsedUserID  int    `json:"used_user_id"`
-	CreatedAt   int64  `json:"created_at"`
-	ExpiredAt   int64  `json:"expired_at"`
-	RedeemedAt  int64  `json:"redeemed_at"`
+	// CodeVisible makes masking explicit for disabled agents. A false value
+	// means Code is intentionally empty because the code is still redeemable.
+	CodeVisible bool  `json:"code_visible"`
+	UsedUserID  int   `json:"used_user_id"`
+	CreatedAt   int64 `json:"created_at"`
+	ExpiredAt   int64 `json:"expired_at"`
+	RedeemedAt  int64 `json:"redeemed_at"`
 }
 
 type AgentCreditLogQuery struct {
@@ -114,7 +118,10 @@ type AgentCreditLogRecord struct {
 }
 
 func ListAgentOrders(agentUserID int, query AgentOrderQuery) ([]AgentOrderRecord, int64, error) {
-	if err := requireAgentAccount(agentUserID, false); err != nil {
+	if !operation_setting.GetAgentSetting().Enabled {
+		return nil, 0, ErrAgentFeatureDisabled
+	}
+	if _, err := getAgentQueryAccount(agentUserID); err != nil {
 		return nil, 0, err
 	}
 	query.AgentUserID = agentUserID
@@ -168,11 +175,27 @@ func ListAdminAgentOrders(query AgentOrderQuery) ([]AgentOrderRecord, int64, err
 }
 
 func ListAgentCodes(agentUserID int, query AgentCodeQuery) ([]AgentCodeRecord, int64, error) {
-	if err := requireAgentAccount(agentUserID, false); err != nil {
+	if !operation_setting.GetAgentSetting().Enabled {
+		return nil, 0, ErrAgentFeatureDisabled
+	}
+	account, err := getAgentQueryAccount(agentUserID)
+	if err != nil {
 		return nil, 0, err
 	}
 	query.AgentUserID = agentUserID
-	return ListAdminAgentCodes(query)
+	records, total, err := ListAdminAgentCodes(query)
+	if err != nil {
+		return nil, 0, err
+	}
+	if account.Status != model.AgentAccountStatusActive {
+		for index := range records {
+			if records[index].Status == AgentCodeStatusUnused {
+				records[index].Code = ""
+				records[index].CodeVisible = false
+			}
+		}
+	}
+	return records, total, nil
 }
 
 func ListAdminAgentCodes(query AgentCodeQuery) ([]AgentCodeRecord, int64, error) {
@@ -197,7 +220,10 @@ func ListAdminAgentCodes(query AgentCodeQuery) ([]AgentCodeRecord, int64, error)
 }
 
 func ListAgentCreditLogs(agentUserID int, query AgentCreditLogQuery) ([]AgentCreditLogRecord, int64, error) {
-	if err := requireAgentAccount(agentUserID, false); err != nil {
+	if !operation_setting.GetAgentSetting().Enabled {
+		return nil, 0, ErrAgentFeatureDisabled
+	}
+	if _, err := getAgentQueryAccount(agentUserID); err != nil {
 		return nil, 0, err
 	}
 	query.AgentUserID = agentUserID
@@ -241,15 +267,22 @@ func listAgentCreditLogRecords(query AgentCreditLogQuery) ([]AgentCreditLogRecor
 	return records, total, nil
 }
 
-// ExportAgentCodes writes an ownership-scoped CSV. It finishes all validation
-// and the maximum-row count before writing, so failures never return a partial
-// code inventory.
+// ExportAgentCodes writes an ownership-scoped CSV. It loads at most one row
+// beyond the limit and finishes validation before writing, so database and
+// maximum-row failures never return a partial code inventory.
 func ExportAgentCodes(writer io.Writer, query AgentCodeQuery) error {
+	if !operation_setting.GetAgentSetting().Enabled {
+		return ErrAgentFeatureDisabled
+	}
 	if writer == nil || query.AgentUserID <= 0 {
 		return ErrAgentQueryInvalid
 	}
-	if err := requireAgentAccount(query.AgentUserID, true); err != nil {
+	account, err := getAgentQueryAccount(query.AgentUserID)
+	if err != nil {
 		return err
+	}
+	if account.Status != model.AgentAccountStatusActive {
+		return ErrAgentAccountDisabled
 	}
 	query.Offset = 0
 	query.Limit = AgentCodeExportMaxRows
@@ -258,29 +291,19 @@ func ExportAgentCodes(writer io.Writer, query AgentCodeQuery) error {
 		return err
 	}
 	dbQuery := buildAgentCodeQuery(query, now)
-	var total int64
-	if err := dbQuery.Count(&total).Error; err != nil {
-		return err
-	}
-	if total > AgentCodeExportMaxRows {
-		return ErrAgentExportLimitExceeded
-	}
-
-	rows, err := dbQuery.Select(strings.Join(agentCodeSelectColumns, ", ")).Order("redemptions.id DESC").Rows()
+	rows, err := loadAgentCodeExportRows(dbQuery.Order("redemptions.id DESC").Limit(AgentCodeExportMaxRows + 1))
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	if len(rows) > AgentCodeExportMaxRows {
+		return ErrAgentExportLimitExceeded
+	}
 
 	csvWriter := csv.NewWriter(writer)
 	if err := csvWriter.Write([]string{"code", "plan", "order_no", "status", "created_at", "expired_at", "redeemed_at"}); err != nil {
 		return err
 	}
-	for rows.Next() {
-		var row agentCodeRow
-		if err := model.DB.ScanRows(rows, &row); err != nil {
-			return err
-		}
+	for _, row := range rows {
 		record := mapAgentCodeRecord(row, now)
 		values := []string{
 			record.Code,
@@ -297,9 +320,6 @@ func ExportAgentCodes(writer io.Writer, query AgentCodeQuery) error {
 		if err := csvWriter.Write(values); err != nil {
 			return err
 		}
-	}
-	if err := rows.Err(); err != nil {
-		return err
 	}
 	csvWriter.Flush()
 	return csvWriter.Error()
@@ -335,6 +355,10 @@ var agentCodeSelectColumns = []string{
 	"redemptions.redeemed_time AS redeemed_at",
 }
 
+var loadAgentCodeExportRows = func(dbQuery *gorm.DB) ([]agentCodeRow, error) {
+	return scanAgentCodeRows(dbQuery)
+}
+
 func buildAgentCodeQuery(query AgentCodeQuery, now int64) *gorm.DB {
 	dbQuery := model.DB.Model(&model.Redemption{}).
 		Joins("LEFT JOIN agent_purchase_orders ON agent_purchase_orders.id = redemptions.agent_order_id").
@@ -356,9 +380,9 @@ func buildAgentCodeQuery(query AgentCodeQuery, now int64) *gorm.DB {
 	}
 	switch query.Status {
 	case AgentCodeStatusUnused:
-		dbQuery = dbQuery.Where("redemptions.status = ? AND (redemptions.expired_time = 0 OR redemptions.expired_time >= ?)", common.RedemptionCodeStatusEnabled, now)
+		dbQuery = dbQuery.Where("redemptions.status = ? AND (redemptions.expired_time = 0 OR redemptions.expired_time > ?)", common.RedemptionCodeStatusEnabled, now)
 	case AgentCodeStatusExpired:
-		dbQuery = dbQuery.Where("redemptions.status = ? AND redemptions.expired_time != 0 AND redemptions.expired_time < ?", common.RedemptionCodeStatusEnabled, now)
+		dbQuery = dbQuery.Where("redemptions.status = ? AND redemptions.expired_time != 0 AND redemptions.expired_time <= ?", common.RedemptionCodeStatusEnabled, now)
 	case AgentCodeStatusUsed:
 		dbQuery = dbQuery.Where("redemptions.status = ?", common.RedemptionCodeStatusUsed)
 	case AgentCodeStatusRefunded:
@@ -388,13 +412,13 @@ func mapAgentCodeRecord(row agentCodeRow, now int64) AgentCodeRecord {
 		status = AgentCodeStatusRefunded
 	case row.RawStatus == common.RedemptionCodeStatusUsed:
 		status = AgentCodeStatusUsed
-	case row.RawStatus == common.RedemptionCodeStatusEnabled && row.ExpiredAt != 0 && row.ExpiredAt < now:
+	case row.RawStatus == common.RedemptionCodeStatusEnabled && row.ExpiredAt != 0 && row.ExpiredAt <= now:
 		status = AgentCodeStatusExpired
 	}
 	return AgentCodeRecord{
 		ID: row.ID, Code: row.Code, AgentUserID: row.AgentUserID,
 		OrderID: row.OrderID, OrderNo: row.OrderNo, PlanID: row.PlanID,
-		PlanTitle: row.PlanTitle, Status: status, UsedUserID: row.UsedUserID,
+		PlanTitle: row.PlanTitle, Status: status, CodeVisible: true, UsedUserID: row.UsedUserID,
 		CreatedAt: row.CreatedAt, ExpiredAt: row.ExpiredAt, RedeemedAt: row.RedeemedAt,
 	}
 }
@@ -426,21 +450,18 @@ func validateAgentQueryPage(offset int, limit int) (int, error) {
 	return limit, nil
 }
 
-func requireAgentAccount(agentUserID int, active bool) error {
+func getAgentQueryAccount(agentUserID int) (*model.AgentAccount, error) {
 	if agentUserID <= 0 {
-		return ErrAgentAccountNotFound
+		return nil, ErrAgentAccountNotFound
 	}
 	var account model.AgentAccount
 	if err := model.DB.Select("status").Where("user_id = ?", agentUserID).First(&account).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return ErrAgentAccountNotFound
+			return nil, ErrAgentAccountNotFound
 		}
-		return err
+		return nil, err
 	}
-	if active && account.Status != model.AgentAccountStatusActive {
-		return ErrAgentAccountDisabled
-	}
-	return nil
+	return &account, nil
 }
 
 func validAgentOrderStatus(status string) bool {
