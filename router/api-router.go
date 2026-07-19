@@ -54,6 +54,21 @@ func SetApiRouter(router *gin.Engine) {
 		apiRouter.GET("/oauth/:provider", middleware.CriticalRateLimit(), controller.HandleOAuth)
 		apiRouter.GET("/ratio_config", middleware.CriticalRateLimit(), controller.GetRatioConfig)
 
+		agentAdminReadRoute := apiRouter.Group("/agent-admin")
+		agentAdminReadRoute.Use(middleware.AdminAuth())
+		{
+			agentAdminReadRoute.GET("/agents", controller.AdminListAgents)
+			agentAdminReadRoute.GET("/agents/:user_id/credit-logs", controller.AdminListAgentCreditLogs)
+		}
+		agentAdminMutationRoute := apiRouter.Group("/agent-admin")
+		agentAdminMutationRoute.Use(middleware.RootAuth())
+		{
+			agentAdminMutationRoute.POST("/agents/:user_id/enable", controller.RootEnableAgent)
+			agentAdminMutationRoute.POST("/agents/:user_id/disable", controller.RootDisableAgent)
+			agentAdminMutationRoute.PATCH("/agents/:user_id/limit", controller.RootUpdateAgentDailyLimit)
+			agentAdminMutationRoute.POST("/agents/:user_id/credit-adjustments", controller.RootAdjustAgentCredit)
+		}
+
 		apiRouter.POST("/stripe/webhook", anonymousRequestBodyLimit, controller.StripeWebhook)
 		apiRouter.POST("/creem/webhook", anonymousRequestBodyLimit, controller.CreemWebhook)
 		apiRouter.POST("/waffo/webhook", anonymousRequestBodyLimit, controller.WaffoWebhook)
