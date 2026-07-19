@@ -187,6 +187,11 @@ func TestRedeemCodeSubscriptionRejectsInvalidStatesUniformly(t *testing.T) {
 		{name: "expires now", status: common.RedemptionCodeStatusEnabled, expiresAt: common.GetTimestamp},
 		{name: "zero expiry", status: common.RedemptionCodeStatusEnabled, expiresAt: func() int64 { return 0 }},
 		{name: "malformed snapshot", status: common.RedemptionCodeStatusEnabled, snapshotRaw: func(t *testing.T) string { return "{" }},
+		{name: "invalid UTF-8 snapshot", status: common.RedemptionCodeStatusEnabled, snapshotRaw: func(t *testing.T) string {
+			raw := append([]byte(`{"version":1,"plan_id":9001,"plan_title":"`), 0xff)
+			raw = append(raw, []byte(`","duration_unit":"custom","custom_seconds":3600,"quota_reset_period":"never"}`)...)
+			return string(raw)
+		}},
 		{name: "unknown snapshot version", status: common.RedemptionCodeStatusEnabled, snapshotRaw: func(t *testing.T) string {
 			return `{"version":2,"plan_id":9001,"plan_title":"Sold Snapshot Pro","duration_unit":"custom","custom_seconds":3600,"quota_reset_period":"never"}`
 		}},

@@ -269,6 +269,9 @@ func EncodeSubscriptionEntitlementSnapshot(snapshot SubscriptionEntitlementSnaps
 }
 
 func DecodeSubscriptionEntitlementSnapshot(value string) (SubscriptionEntitlementSnapshot, error) {
+	if !utf8.ValidString(value) {
+		return SubscriptionEntitlementSnapshot{}, errors.New("invalid UTF-8 subscription entitlement snapshot")
+	}
 	var snapshot SubscriptionEntitlementSnapshot
 	if err := common.UnmarshalJsonStr(value, &snapshot); err != nil {
 		return SubscriptionEntitlementSnapshot{}, err
@@ -677,7 +680,7 @@ func CreateUserSubscriptionFromEntitlementTx(tx *gorm.DB, userId int, snapshot S
 		QuotaResetPeriod:        snapshot.QuotaResetPeriod,
 		QuotaResetCustomSeconds: snapshot.QuotaResetCustomSeconds,
 	}
-	nowUnix := GetDBTimestamp()
+	nowUnix := getDBTimestamp(tx)
 	now := time.Unix(nowUnix, 0)
 	endUnix, err := calcPlanEndTime(now, plan)
 	if err != nil {

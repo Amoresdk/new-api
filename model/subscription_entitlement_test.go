@@ -112,7 +112,6 @@ func TestSubscriptionEntitlementValidationRejectsUndeliverableSnapshots(t *testi
 		edit func(*SubscriptionEntitlementSnapshot)
 	}{
 		{name: "empty title", edit: func(value *SubscriptionEntitlementSnapshot) { value.PlanTitle = " " }},
-		{name: "invalid title encoding", edit: func(value *SubscriptionEntitlementSnapshot) { value.PlanTitle = string([]byte{0xff}) }},
 		{name: "oversized title", edit: func(value *SubscriptionEntitlementSnapshot) { value.PlanTitle = strings.Repeat("a", 129) }},
 		{name: "oversized upgrade group", edit: func(value *SubscriptionEntitlementSnapshot) { value.UpgradeGroup = strings.Repeat("g", 65) }},
 		{name: "oversized downgrade group", edit: func(value *SubscriptionEntitlementSnapshot) { value.DowngradeGroup = strings.Repeat("g", 65) }},
@@ -158,6 +157,22 @@ func TestSubscriptionEntitlementValidationRejectsUndeliverableSnapshots(t *testi
 			require.Error(t, err)
 		})
 	}
+}
+
+func TestSubscriptionEntitlementRejectsInvalidUTF8SnapshotContent(t *testing.T) {
+	snapshot := SubscriptionEntitlementSnapshot{
+		Version: SubscriptionEntitlementVersion1, PlanId: 7110,
+		PlanTitle: string([]byte{0xff}), DurationUnit: SubscriptionDurationMonth,
+		DurationValue: 1, QuotaResetPeriod: SubscriptionResetNever,
+	}
+	require.Error(t, ValidateSubscriptionEntitlementSnapshot(snapshot))
+	_, err := EncodeSubscriptionEntitlementSnapshot(snapshot)
+	require.Error(t, err)
+
+	raw := append([]byte(`{"version":1,"plan_id":7110,"plan_title":"`), 0xff)
+	raw = append(raw, []byte(`","duration_unit":"month","duration_value":1,"quota_reset_period":"never"}`)...)
+	_, err = DecodeSubscriptionEntitlementSnapshot(string(raw))
+	require.Error(t, err)
 }
 
 func TestBuildSubscriptionEntitlementSnapshotRejectsInvalidEnabledPlanTerms(t *testing.T) {
