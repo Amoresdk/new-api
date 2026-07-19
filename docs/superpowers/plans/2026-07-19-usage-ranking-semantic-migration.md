@@ -508,3 +508,35 @@ Expected: no whitespace errors; only ranking-related source, test, plan/spec, an
 git add web/classic/src/locales web/default/src/i18n/locales
 git commit -m "i18n: translate usage ranking"
 ```
+
+### Task 7: Per-group model and channel consumption distribution
+
+**Files:**
+- Modify: `model/log_ranking.go`
+- Modify: `model/log_ranking_test.go`
+- Modify: `web/classic/src/components/table/usage-logs/ranking/UsageRankingTable.jsx`
+- Modify: `web/classic/src/components/table/usage-logs/ranking/usage-ranking-table.css`
+- Modify: `web/default/src/features/usage-logs/types.ts`
+- Modify: `web/default/src/features/usage-logs/components/ranking/usage-ranking-table.tsx`
+- Modify: `web/default/src/features/usage-logs/components/ranking/usage-ranking-mobile-list.tsx`
+- Modify: both frontend locale sets
+
+**Interfaces:**
+- Produces `UsageRankingGroupStat.model_stats` and `UsageRankingGroupStat.channel_stats` as non-null arrays.
+- Each distribution item includes quota, quota ratio, request count, prompt/completion/total tokens, and last-used time; channel items additionally include channel ID and optional channel name.
+
+- [ ] **Step 1: Add a failing backend contract test**
+
+Seed one user/group with two models and two channels, including one model used across both channels. Assert exact per-model and per-channel totals, quota ratios, sorting, channel-name enrichment, and non-null nested arrays.
+
+- [ ] **Step 2: Implement two bounded aggregation queries**
+
+Scope both queries to the current page identities and all active filters. Assemble rows by the existing `usageRankingGroupIdentity`, calculate quota ratios in Go, and batch-resolve channel names from the main database without changing the authoritative channel ID.
+
+- [ ] **Step 3: Render both distributions in Classic and Default**
+
+Show model and channel sections immediately inside each expanded group. Use each frontend's native components, compact progress bars for quota share, responsive desktop tables, and readable mobile cards without an extra disclosure click.
+
+- [ ] **Step 4: Add translations and verify**
+
+Add all user-facing keys to every supported locale, then run focused Go tests, full Go tests, Classic formatting/build checks, Default typecheck/lint/build checks, and desktop/mobile browser QA.
