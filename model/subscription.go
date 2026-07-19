@@ -33,6 +33,8 @@ const (
 	SubscriptionResetCustom  = "custom"
 )
 
+const SubscriptionEntitlementVersion1 = 1
+
 var (
 	ErrSubscriptionOrderNotFound      = errors.New("subscription order not found")
 	ErrSubscriptionOrderStatusInvalid = errors.New("subscription order status invalid")
@@ -187,6 +189,82 @@ type SubscriptionPlan struct {
 
 	CreatedAt int64 `json:"created_at" gorm:"bigint"`
 	UpdatedAt int64 `json:"updated_at" gorm:"bigint"`
+}
+
+// SubscriptionEntitlementSnapshot is the immutable entitlement contract stored
+// with a package-code purchase. New versions must remain decodable after plans
+// are edited or removed.
+type SubscriptionEntitlementSnapshot struct {
+	Version                 int    `json:"version"`
+	PlanId                  int    `json:"plan_id"`
+	PlanTitle               string `json:"plan_title"`
+	DurationUnit            string `json:"duration_unit"`
+	DurationValue           int    `json:"duration_value"`
+	CustomSeconds           int64  `json:"custom_seconds"`
+	MaxPurchasePerUser      int    `json:"max_purchase_per_user"`
+	UpgradeGroup            string `json:"upgrade_group"`
+	DowngradeGroup          string `json:"downgrade_group"`
+	TotalAmount             int64  `json:"total_amount"`
+	QuotaResetPeriod        string `json:"quota_reset_period"`
+	QuotaResetCustomSeconds int64  `json:"quota_reset_custom_seconds"`
+	AllowWalletOverflow     bool   `json:"allow_wallet_overflow"`
+}
+
+func BuildSubscriptionEntitlementSnapshot(plan *SubscriptionPlan) (SubscriptionEntitlementSnapshot, error) {
+	if plan == nil || plan.Id <= 0 {
+		return SubscriptionEntitlementSnapshot{}, errors.New("invalid plan")
+	}
+	allowWalletOverflow := true
+	if plan.AllowWalletOverflow != nil {
+		allowWalletOverflow = *plan.AllowWalletOverflow
+	}
+	return SubscriptionEntitlementSnapshot{
+		Version:                 SubscriptionEntitlementVersion1,
+		PlanId:                  plan.Id,
+		PlanTitle:               plan.Title,
+		DurationUnit:            plan.DurationUnit,
+		DurationValue:           plan.DurationValue,
+		CustomSeconds:           plan.CustomSeconds,
+		MaxPurchasePerUser:      plan.MaxPurchasePerUser,
+		UpgradeGroup:            strings.TrimSpace(plan.UpgradeGroup),
+		DowngradeGroup:          strings.TrimSpace(plan.DowngradeGroup),
+		TotalAmount:             plan.TotalAmount,
+		QuotaResetPeriod:        NormalizeResetPeriod(plan.QuotaResetPeriod),
+		QuotaResetCustomSeconds: plan.QuotaResetCustomSeconds,
+		AllowWalletOverflow:     allowWalletOverflow,
+	}, nil
+}
+
+func EncodeSubscriptionEntitlementSnapshot(snapshot SubscriptionEntitlementSnapshot) (string, error) {
+	if err := validateSubscriptionEntitlementSnapshot(snapshot); err != nil {
+		return "", err
+	}
+	data, err := common.Marshal(snapshot)
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
+}
+
+func DecodeSubscriptionEntitlementSnapshot(value string) (SubscriptionEntitlementSnapshot, error) {
+	var snapshot SubscriptionEntitlementSnapshot
+	if err := common.UnmarshalJsonStr(value, &snapshot); err != nil {
+		return SubscriptionEntitlementSnapshot{}, err
+	}
+	if err := validateSubscriptionEntitlementSnapshot(snapshot); err != nil {
+		return SubscriptionEntitlementSnapshot{}, err
+	}
+	return snapshot, nil
+}
+
+func validateSubscriptionEntitlementSnapshot(snapshot SubscriptionEntitlementSnapshot) error {
+	if snapshot.Version != SubscriptionEntitlementVersion1 {
+		return fmt.Errorf("unsupported subscription entitlement version: %d", snapshot.Version)
+	}
+	if snapshot.PlanId <= 0 {
+		return errors.New("invalid subscription entitlement plan id")
+	}
+	return nil
 }
 
 func (p *SubscriptionPlan) BeforeCreate(tx *gorm.DB) error {
@@ -482,25 +560,46 @@ func downgradeUserGroupForSubscriptionTx(tx *gorm.DB, sub *UserSubscription, now
 }
 
 func CreateUserSubscriptionFromPlanTx(tx *gorm.DB, userId int, plan *SubscriptionPlan, source string) (*UserSubscription, error) {
+	snapshot, err := BuildSubscriptionEntitlementSnapshot(plan)
+	if err != nil {
+		return nil, err
+	}
+	return CreateUserSubscriptionFromEntitlementTx(tx, userId, snapshot, source)
+}
+
+func CreateUserSubscriptionFromEntitlementTx(tx *gorm.DB, userId int, snapshot SubscriptionEntitlementSnapshot, source string) (*UserSubscription, error) {
 	if tx == nil {
 		return nil, errors.New("tx is nil")
 	}
-	if plan == nil || plan.Id == 0 {
-		return nil, errors.New("invalid plan")
+	if err := validateSubscriptionEntitlementSnapshot(snapshot); err != nil {
+		return nil, err
 	}
 	if userId <= 0 {
 		return nil, errors.New("invalid user id")
 	}
-	if plan.MaxPurchasePerUser > 0 {
+	if snapshot.MaxPurchasePerUser > 0 {
 		var count int64
 		if err := tx.Model(&UserSubscription{}).
-			Where("user_id = ? AND plan_id = ?", userId, plan.Id).
+			Where("user_id = ? AND plan_id = ?", userId, snapshot.PlanId).
 			Count(&count).Error; err != nil {
 			return nil, err
 		}
-		if count >= int64(plan.MaxPurchasePerUser) {
+		if count >= int64(snapshot.MaxPurchasePerUser) {
 			return nil, errors.New("已达到该套餐购买上限")
 		}
+	}
+	plan := &SubscriptionPlan{
+		Id:                      snapshot.PlanId,
+		Title:                   snapshot.PlanTitle,
+		DurationUnit:            snapshot.DurationUnit,
+		DurationValue:           snapshot.DurationValue,
+		CustomSeconds:           snapshot.CustomSeconds,
+		MaxPurchasePerUser:      snapshot.MaxPurchasePerUser,
+		UpgradeGroup:            snapshot.UpgradeGroup,
+		DowngradeGroup:          snapshot.DowngradeGroup,
+		TotalAmount:             snapshot.TotalAmount,
+		QuotaResetPeriod:        snapshot.QuotaResetPeriod,
+		QuotaResetCustomSeconds: snapshot.QuotaResetCustomSeconds,
 	}
 	nowUnix := GetDBTimestamp()
 	now := time.Unix(nowUnix, 0)
@@ -529,14 +628,10 @@ func CreateUserSubscriptionFromPlanTx(tx *gorm.DB, userId int, plan *Subscriptio
 			}
 		}
 	}
-	allowWalletOverflow := true
-	if plan.AllowWalletOverflow != nil {
-		allowWalletOverflow = *plan.AllowWalletOverflow
-	}
 	sub := &UserSubscription{
 		UserId:              userId,
-		PlanId:              plan.Id,
-		AmountTotal:         plan.TotalAmount,
+		PlanId:              snapshot.PlanId,
+		AmountTotal:         snapshot.TotalAmount,
 		AmountUsed:          0,
 		StartTime:           now.Unix(),
 		EndTime:             endUnix,
@@ -547,7 +642,7 @@ func CreateUserSubscriptionFromPlanTx(tx *gorm.DB, userId int, plan *Subscriptio
 		UpgradeGroup:        upgradeGroup,
 		PrevUserGroup:       prevGroup,
 		DowngradeGroup:      strings.TrimSpace(plan.DowngradeGroup),
-		AllowWalletOverflow: allowWalletOverflow,
+		AllowWalletOverflow: snapshot.AllowWalletOverflow,
 		CreatedAt:           common.GetTimestamp(),
 		UpdatedAt:           common.GetTimestamp(),
 	}
