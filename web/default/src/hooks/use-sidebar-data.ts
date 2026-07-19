@@ -168,6 +168,12 @@ export function useSidebarData(): SidebarData {
             icon: CreditCard,
           },
           {
+            title: t('Agent management'),
+            url: '/agent-admin',
+            icon: AgentWorkspaceIcon,
+            requiredRole: ROLE.ADMIN,
+          },
+          {
             title: t('System Info'),
             url: '/system-info',
             icon: ServerCog,
