@@ -44,8 +44,8 @@ func (account *AgentAccount) BeforeCreate(*gorm.DB) error {
 
 // AgentCreditLog is an immutable record of a point balance change.
 type AgentCreditLog struct {
-	Id             int    `json:"id"`
-	AgentUserId    int    `json:"agent_user_id" gorm:"index;not null"`
+	Id             int    `json:"id" gorm:"index:idx_agent_credit_log_agent_user_id_id,priority:2"`
+	AgentUserId    int    `json:"agent_user_id" gorm:"index;index:idx_agent_credit_log_agent_user_id_id,priority:1;not null"`
 	Delta          int64  `json:"-" gorm:"type:bigint;not null"`
 	BalanceBefore  int64  `json:"-" gorm:"type:bigint;not null"`
 	BalanceAfter   int64  `json:"-" gorm:"type:bigint;not null"`

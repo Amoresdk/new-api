@@ -37,11 +37,22 @@ func guardAgentLedgerConsistencyTx(tx *gorm.DB, account *model.AgentAccount) err
 	if tx == nil || account == nil || account.Id <= 0 || account.UserId <= 0 {
 		return ErrAgentLedgerMismatch
 	}
-	state, err := scanAgentLedgerState(tx, account.UserId, account.Balance)
-	if err != nil {
-		return err
+	var latest model.AgentCreditLog
+	result := tx.Select("delta", "balance_before", "balance_after").
+		Where("agent_user_id = ?", account.UserId).
+		Order("id DESC").Limit(1).Find(&latest)
+	if result.Error != nil {
+		return result.Error
 	}
-	if !state.Matches {
+	if result.RowsAffected == 0 {
+		if account.Balance == 0 {
+			return nil
+		}
+		return ErrAgentLedgerMismatch
+	}
+	calculatedAfter, err := checkedAgentLedgerAdd(latest.BalanceBefore, latest.Delta)
+	if err != nil || latest.BalanceBefore < 0 || latest.BalanceAfter < 0 ||
+		calculatedAfter != latest.BalanceAfter || latest.BalanceAfter != account.Balance {
 		return ErrAgentLedgerMismatch
 	}
 	return nil

@@ -103,7 +103,10 @@ func RefundAgentCodes(input AgentRefundInput) (*AgentRefundResult, error) {
 		if !input.RootOverride {
 			accountWhere = accountWhere.Where("status = ?", model.AgentAccountStatusActive)
 		}
-		guard := accountWhere.UpdateColumn("version", expectedAccount.Version+1)
+		guard := accountWhere.Updates(map[string]interface{}{
+			"version":    expectedAccount.Version + 1,
+			"updated_at": common.GetTimestamp(),
+		})
 		if guard.Error != nil {
 			return guard.Error
 		}

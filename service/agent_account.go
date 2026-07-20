@@ -7,6 +7,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 	"gorm.io/gorm"
 )
@@ -302,7 +303,10 @@ func AdjustAgentCredit(input AgentCreditAdjustment) (*AgentCreditAdjustmentResul
 		err := model.DB.Transaction(func(tx *gorm.DB) error {
 			guard := tx.Model(&model.AgentAccount{}).
 				Where("id = ? AND version = ? AND status = ?", expectedAccount.Id, expectedAccount.Version, model.AgentAccountStatusActive).
-				UpdateColumn("version", expectedAccount.Version+1)
+				Updates(map[string]interface{}{
+					"version":    expectedAccount.Version + 1,
+					"updated_at": common.GetTimestamp(),
+				})
 			if guard.Error != nil {
 				return guard.Error
 			}

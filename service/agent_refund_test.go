@@ -152,6 +152,8 @@ func TestRefundAgentCodesSupportsHundredPercentFeeWithoutBalanceWrite(t *testing
 	fixture := setupAgentRefundTest(t)
 	require.NoError(t, model.DB.Model(&model.AgentPurchaseOrder{}).Where("id = ?", fixture.orders[0].Id).
 		Update("refund_fee_bps", 10000).Error)
+	require.NoError(t, model.DB.Model(&model.AgentAccount{}).Where("user_id = ?", fixture.agentID).
+		UpdateColumn("updated_at", int64(1)).Error)
 	var balanceWrites atomic.Int32
 	var accountWrites atomic.Int32
 	callbackName := "test:refund-zero-balance-write"
@@ -175,6 +177,9 @@ func TestRefundAgentCodesSupportsHundredPercentFeeWithoutBalanceWrite(t *testing
 	assert.Equal(t, int64(1000), result.BalanceAfter)
 	assert.Equal(t, int32(1), accountWrites.Load(), "the version guard is the only required account write")
 	assert.Zero(t, balanceWrites.Load(), "zero refund must rely on the successful version guard, not a no-op balance update")
+	var account model.AgentAccount
+	require.NoError(t, model.DB.Where("user_id = ?", fixture.agentID).First(&account).Error)
+	assert.Greater(t, account.UpdatedAt, int64(1))
 	var ledger model.AgentCreditLog
 	require.NoError(t, model.DB.Where("event_type = ? AND redemption_id = ?", model.AgentCreditEventRefund, fixture.codes[0].Id).First(&ledger).Error)
 	assert.Zero(t, ledger.Delta)

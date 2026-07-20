@@ -18,6 +18,7 @@ func TestAgentModels(t *testing.T) {
 		&AgentRefundRequest{},
 		&Redemption{},
 	))
+	assert.True(t, DB.Migrator().HasIndex(&AgentCreditLog{}, "idx_agent_credit_log_agent_user_id_id"))
 
 	entities := []interface{}{
 		&AgentPurchaseOrder{},

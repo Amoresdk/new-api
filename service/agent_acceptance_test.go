@@ -133,6 +133,9 @@ func TestAgentPointsWorkflowAcceptance(t *testing.T) {
 		Where("type = ?", common.RedemptionCodeTypeSubscription).Count(&codeCount).Error)
 	assert.Equal(t, int64(1), orderCount)
 	assert.Equal(t, int64(10), codeCount)
+	replayedAccount, err := GetAgentAccount(agentUserID)
+	require.NoError(t, err)
+	assert.Equal(t, 10, replayedAccount.DailyCodeCount)
 
 	// Change the live plan and offer: sold codes must continue using purchase snapshots.
 	require.NoError(t, model.DB.Model(&model.SubscriptionPlan{}).Where("id = ?", plan.Id).Updates(map[string]interface{}{

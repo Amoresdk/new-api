@@ -137,6 +137,25 @@ func TestAdjustAgentCreditCreatesExactImmutableLedger(t *testing.T) {
 	assert.Equal(t, logs[0].BalanceAfter, logs[1].BalanceBefore)
 }
 
+func TestAdjustAgentCreditAdvancesAccountUpdatedAt(t *testing.T) {
+	setupAgentAccountTest(t)
+	createAgentTestUser(t, 119)
+	account, err := EnableAgent(119)
+	require.NoError(t, err)
+	require.NoError(t, model.DB.Model(&model.AgentAccount{}).Where("id = ?", account.Id).
+		UpdateColumn("updated_at", int64(1)).Error)
+
+	_, err = AdjustAgentCredit(AgentCreditAdjustment{
+		AgentUserID: 119, OperatorUserID: 1, Amount: 1000,
+		Direction: AgentCreditDirectionCredit, Reason: "timestamp advance",
+		IdempotencyKey: "timestamp-advance",
+	})
+	require.NoError(t, err)
+	var stored model.AgentAccount
+	require.NoError(t, model.DB.First(&stored, account.Id).Error)
+	assert.Greater(t, stored.UpdatedAt, int64(1))
+}
+
 func TestAdjustAgentCreditRejectsLedgerMismatchWithoutMutation(t *testing.T) {
 	setupAgentAccountTest(t)
 	createAgentTestUser(t, 120)
@@ -163,6 +182,80 @@ func TestAdjustAgentCreditRejectsLedgerMismatchWithoutMutation(t *testing.T) {
 	var logs int64
 	require.NoError(t, model.DB.Model(&model.AgentCreditLog{}).Where("agent_user_id = ?", 120).Count(&logs).Error)
 	assert.Equal(t, int64(1), logs)
+}
+
+func TestAdjustAgentCreditHotGuardUsesLatestLedgerEntry(t *testing.T) {
+	setupAgentAccountTest(t)
+	createAgentTestUser(t, 121)
+	_, err := EnableAgent(121)
+	require.NoError(t, err)
+	for index, amount := range []int64{1000, 500} {
+		_, err = AdjustAgentCredit(AgentCreditAdjustment{
+			AgentUserID: 121, OperatorUserID: 1, Amount: amount,
+			Direction: AgentCreditDirectionCredit, Reason: "seed ledger",
+			IdempotencyKey: fmt.Sprintf("tail-seed-%d", index),
+		})
+		require.NoError(t, err)
+	}
+	var first model.AgentCreditLog
+	require.NoError(t, model.DB.Where("agent_user_id = ?", 121).Order("id ASC").First(&first).Error)
+	require.NoError(t, model.DB.Exec("UPDATE agent_credit_logs SET balance_before = ? WHERE id = ?", 1, first.Id).Error)
+
+	_, err = AdjustAgentCredit(AgentCreditAdjustment{
+		AgentUserID: 121, OperatorUserID: 1, Amount: 250,
+		Direction: AgentCreditDirectionCredit, Reason: "tail-only guard",
+		IdempotencyKey: "tail-only-guard",
+	})
+	require.NoError(t, err)
+	account, err := GetAgentAccount(121)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1750), account.Balance)
+	reconciliation, err := ReconcileAgentAccount(121)
+	require.NoError(t, err)
+	assert.False(t, reconciliation.Matches)
+	assert.False(t, reconciliation.LedgerContinuous)
+}
+
+func TestAdjustAgentCreditRejectsCorruptedLatestLedgerEntry(t *testing.T) {
+	setupAgentAccountTest(t)
+	createAgentTestUser(t, 122)
+	_, err := EnableAgent(122)
+	require.NoError(t, err)
+	_, err = AdjustAgentCredit(AgentCreditAdjustment{
+		AgentUserID: 122, OperatorUserID: 1, Amount: 1000,
+		Direction: AgentCreditDirectionCredit, Reason: "seed ledger",
+		IdempotencyKey: "tail-corruption-seed",
+	})
+	require.NoError(t, err)
+	require.NoError(t, model.DB.Exec(
+		"UPDATE agent_credit_logs SET balance_after = ? WHERE agent_user_id = ?", 999, 122,
+	).Error)
+
+	_, err = AdjustAgentCredit(AgentCreditAdjustment{
+		AgentUserID: 122, OperatorUserID: 1, Amount: 100,
+		Direction: AgentCreditDirectionCredit, Reason: "must reject corrupt tail",
+		IdempotencyKey: "tail-corruption-reject",
+	})
+	assert.ErrorIs(t, err, ErrAgentLedgerMismatch)
+	account, getErr := GetAgentAccount(122)
+	require.NoError(t, getErr)
+	assert.Equal(t, int64(1000), account.Balance)
+}
+
+func TestAdjustAgentCreditRejectsNonzeroBalanceWithoutLedger(t *testing.T) {
+	setupAgentAccountTest(t)
+	createAgentTestUser(t, 123)
+	account, err := EnableAgent(123)
+	require.NoError(t, err)
+	require.NoError(t, model.DB.Model(&model.AgentAccount{}).Where("id = ?", account.Id).
+		UpdateColumn("balance", int64(1)).Error)
+
+	_, err = AdjustAgentCredit(AgentCreditAdjustment{
+		AgentUserID: 123, OperatorUserID: 1, Amount: 100,
+		Direction: AgentCreditDirectionCredit, Reason: "must reject missing tail",
+		IdempotencyKey: "missing-tail-reject",
+	})
+	assert.ErrorIs(t, err, ErrAgentLedgerMismatch)
 }
 
 func TestAdjustAgentCreditRejectsInvalidInputAndRollsBackInsufficientDebit(t *testing.T) {
