@@ -309,7 +309,10 @@ export async function redeemTypedCode(
   request: TypedRedemptionRequest
 ): Promise<ApiResult<TypedRedemption>> {
   const payload = typedRedemptionRequestSchema.parse(request)
-  const response = await api.post('/api/user/redeem', payload)
+  const response = await api.post('/api/user/redeem', payload, {
+    skipBusinessError: true,
+    skipErrorHandler: true,
+  })
   return typedRedemptionResponseSchema.parse(response.data)
 }
 

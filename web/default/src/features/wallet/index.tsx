@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { SectionPageLayout } from '@/components/layout'
@@ -30,7 +30,10 @@ import { CreemConfirmDialog } from './components/dialogs/creem-confirm-dialog'
 import { PaymentConfirmDialog } from './components/dialogs/payment-confirm-dialog'
 import { TransferDialog } from './components/dialogs/transfer-dialog'
 import { RechargeFormCard } from './components/recharge-form-card'
-import { SubscriptionPlansCard } from './components/subscription-plans-card'
+import {
+  SubscriptionPlansCard,
+  type SubscriptionPlansCardHandle,
+} from './components/subscription-plans-card'
 import { WalletStatsCard } from './components/wallet-stats-card'
 import { DEFAULT_DISCOUNT_RATE } from './constants'
 import {
@@ -47,6 +50,10 @@ import {
   getMinTopupAmount,
   isWaffoPancakePayment,
 } from './lib'
+import {
+  createLatestRequestGuard,
+  runLatestRequest,
+} from './lib/latest-request'
 import type {
   UserWalletData,
   PaymentMethod,
@@ -75,7 +82,8 @@ export function Wallet(props: WalletProps) {
   const [selectedCreemProduct, setSelectedCreemProduct] =
     useState<CreemProduct | null>(null)
   const [showSubscriptionPanel, setShowSubscriptionPanel] = useState(true)
-  const [subscriptionRefreshToken, setSubscriptionRefreshToken] = useState(0)
+  const [userRequestGuard] = useState(createLatestRequestGuard)
+  const subscriptionPlansRef = useRef<SubscriptionPlansCardHandle>(null)
 
   const { status } = useStatus()
   const { currency } = useSystemConfig()
@@ -107,22 +115,34 @@ export function Wallet(props: WalletProps) {
 
   // Fetch and refresh user data
   const fetchUser = useCallback(async () => {
-    try {
-      setUserLoading(true)
-      const response = await getSelf()
-      if (response.success && response.data) {
-        setUser(response.data as UserWalletData)
-      }
-    } catch (error) {
-      // eslint-disable-next-line no-console
-      console.error('Failed to fetch user data:', error)
-    } finally {
-      setUserLoading(false)
-    }
-  }, [])
+    setUserLoading(true)
+    await runLatestRequest(
+      userRequestGuard,
+      async () => {
+        try {
+          return { response: await getSelf(), error: undefined }
+        } catch (error) {
+          return { response: undefined, error }
+        }
+      },
+      (result) => {
+        if (result.error) {
+          // eslint-disable-next-line no-console
+          console.error('Failed to fetch user data:', result.error)
+          return
+        }
+        if (result.response?.success && result.response.data) {
+          setUser(result.response.data as UserWalletData)
+        }
+      },
+      () => setUserLoading(false)
+    )
+  }, [userRequestGuard])
 
-  const refreshSubscriptions = useCallback(() => {
-    setSubscriptionRefreshToken((current) => current + 1)
+  const refreshSubscriptions = useCallback(async () => {
+    if (subscriptionPlansRef.current) {
+      await subscriptionPlansRef.current.refreshSubscriptions()
+    }
   }, [])
 
   const { redeeming, redeemCode } = useRedemption({
@@ -131,8 +151,12 @@ export function Wallet(props: WalletProps) {
   })
 
   useEffect(() => {
-    fetchUser()
-  }, [fetchUser])
+    userRequestGuard.activate()
+    void fetchUser()
+    return () => {
+      userRequestGuard.deactivate()
+    }
+  }, [fetchUser, userRequestGuard])
 
   useEffect(() => {
     if (props.initialShowHistory) {
@@ -317,11 +341,11 @@ export function Wallet(props: WalletProps) {
               </div>
 
               <SubscriptionPlansCard
+                ref={subscriptionPlansRef}
                 topupInfo={topupInfo}
                 onAvailabilityChange={handleSubscriptionAvailabilityChange}
                 userQuota={user?.quota}
                 onPurchaseSuccess={fetchUser}
-                refreshToken={subscriptionRefreshToken}
               />
             </div>
 

@@ -24,7 +24,6 @@ import type { TypedRedemption } from '@/features/agents/types'
 import {
   executeRedemption,
   formatRedemptionEndTime,
-  walletRedemptionQueryKeys,
   type RedemptionExecutionDependencies,
 } from './redemption'
 
@@ -43,7 +42,6 @@ function dependencies(
     failures: 0,
     userRefreshes: 0,
     subscriptionRefreshes: 0,
-    invalidations: [] as Array<readonly (readonly unknown[])[]>,
   }
   const deps: RedemptionExecutionDependencies = {
     redeem: async () => result,
@@ -65,9 +63,6 @@ function dependencies(
     refreshSubscriptions: async () => {
       calls.subscriptionRefreshes += 1
     },
-    invalidateQueries: async (queryKeys) => {
-      calls.invalidations.push(queryKeys)
-    },
   }
   return { calls, deps }
 }
@@ -88,7 +83,6 @@ describe('wallet typed redemption', () => {
     ])
     assert.equal(calls.userRefreshes, 1)
     assert.equal(calls.subscriptionRefreshes, 0)
-    assert.deepEqual(calls.invalidations, [[walletRedemptionQueryKeys.user]])
   })
 
   test('subscription redemption never quota-formats its ID and visibly refreshes subscriptions', async () => {
@@ -115,9 +109,6 @@ describe('wallet typed redemption', () => {
     ])
     assert.equal(calls.userRefreshes, 1)
     assert.equal(calls.subscriptionRefreshes, 1)
-    assert.deepEqual(calls.invalidations, [
-      [walletRedemptionQueryKeys.user, walletRedemptionQueryKeys.subscriptions],
-    ])
   })
 
   test('business and transport failures expose only the generic failure effect', async () => {
@@ -151,10 +142,6 @@ describe('wallet typed redemption', () => {
     deps.refreshUser = async () => {
       throw new Error('refresh failed')
     }
-    deps.invalidateQueries = async () => {
-      throw new Error('invalidation failed')
-    }
-
     assert.equal(await executeRedemption('already-redeemed', deps), true)
     assert.equal(calls.failures, 0)
     assert.deepEqual(calls.successes, [{ type: 'quota', quota: 'quota:100' }])
@@ -163,5 +150,42 @@ describe('wallet typed redemption', () => {
   test('formats project Chinese language codes with valid Intl locales', () => {
     assert.doesNotThrow(() => formatRedemptionEndTime(1_900_000_000, 'zhCN'))
     assert.doesNotThrow(() => formatRedemptionEndTime(1_900_000_000, 'zhTW'))
+  })
+
+  test('waits for the actual subscription refresh before reporting completion', async () => {
+    const { deps } = dependencies({
+      success: true,
+      message: '',
+      data: {
+        type: 'subscription',
+        subscription_id: 9,
+        plan_title: 'Pro',
+        end_time: 1_900_000_000,
+      },
+    })
+    let releaseNetwork: (() => void) | undefined
+    let signalStarted: (() => void) | undefined
+    const networkStarted = new Promise<void>((resolve) => {
+      signalStarted = resolve
+    })
+    deps.refreshSubscriptions = async () => {
+      signalStarted?.()
+      await new Promise<void>((resolve) => {
+        releaseNetwork = resolve
+      })
+    }
+
+    let settled = false
+    const redemption = executeRedemption('subscription-code', deps).then(
+      (result) => {
+        settled = true
+        return result
+      }
+    )
+    await networkStarted
+    assert.equal(settled, false)
+    releaseNetwork?.()
+    assert.equal(await redemption, true)
+    assert.equal(settled, true)
   })
 })

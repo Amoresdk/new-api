@@ -33,6 +33,7 @@ import {
   getAgentAccessOverview,
   getAgentCodes,
   getAgentOrders,
+  redeemTypedCode,
 } from './api'
 import type { AgentCodeParams, AgentOrderParams } from './types'
 
@@ -143,6 +144,28 @@ describe('agent API request isolation', () => {
       assert.equal(captured?.skipBusinessError, true)
       assert.equal(captured?.skipErrorHandler, true)
       assert.equal(captured?.disableDuplicate, true)
+    } finally {
+      api.defaults.adapter = originalAdapter
+    }
+  })
+
+  test('lets wallet redemption own business and transport error feedback', async () => {
+    const originalAdapter = api.defaults.adapter
+    let captured: InternalAxiosRequestConfig | undefined
+    api.defaults.adapter = async (config) => {
+      captured = config
+      return response(config, {
+        success: true,
+        message: '',
+        data: { type: 'quota', quota: 0 },
+      })
+    }
+
+    try {
+      const result = await redeemTypedCode({ key: 'quota-code' })
+      assert.equal(result.success, true)
+      assert.equal(captured?.skipBusinessError, true)
+      assert.equal(captured?.skipErrorHandler, true)
     } finally {
       api.defaults.adapter = originalAdapter
     }

@@ -16,7 +16,6 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useQueryClient } from '@tanstack/react-query'
 import i18next from 'i18next'
 import { useState, useCallback } from 'react'
 import { toast } from 'sonner'
@@ -37,7 +36,6 @@ type UseRedemptionOptions = {
 
 export function useRedemption(options: UseRedemptionOptions) {
   const [redeeming, setRedeeming] = useState(false)
-  const queryClient = useQueryClient()
 
   const redeemCode = useCallback(
     async (code: string): Promise<boolean> => {
@@ -73,19 +71,12 @@ export function useRedemption(options: UseRedemptionOptions) {
           notifyFailure: () => toast.error(i18next.t('Redemption failed')),
           refreshUser: options.refreshUser,
           refreshSubscriptions: options.refreshSubscriptions,
-          invalidateQueries: async (queryKeys) => {
-            await Promise.all(
-              queryKeys.map((queryKey) =>
-                queryClient.invalidateQueries({ queryKey })
-              )
-            )
-          },
         })
       } finally {
         setRedeeming(false)
       }
     },
-    [options.refreshSubscriptions, options.refreshUser, queryClient]
+    [options.refreshSubscriptions, options.refreshUser]
   )
 
   return {

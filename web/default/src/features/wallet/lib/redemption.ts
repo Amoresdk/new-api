@@ -21,11 +21,6 @@ import { toIntlLocale } from '@/i18n/languages'
 
 import type { RedemptionResponse } from '../types'
 
-export const walletRedemptionQueryKeys = {
-  user: ['user', 'self'] as const,
-  subscriptions: ['subscriptions', 'self'] as const,
-}
-
 type RedemptionSuccessNotice =
   | { type: 'quota'; quota: string }
   | { type: 'subscription'; planTitle: string; endDate: string }
@@ -38,9 +33,6 @@ export type RedemptionExecutionDependencies = {
   notifyFailure: () => void
   refreshUser: () => void | Promise<void>
   refreshSubscriptions: () => void | Promise<void>
-  invalidateQueries: (
-    queryKeys: readonly (readonly unknown[])[]
-  ) => void | Promise<void>
 }
 
 export function formatRedemptionEndTime(
@@ -86,10 +78,7 @@ export async function executeRedemption(
       // The server has already redeemed the code. Presentation failures must
       // not invite a retry that can only report the code as used.
     }
-    await settleRedemptionRefreshes([
-      dependencies.refreshUser,
-      () => dependencies.invalidateQueries([walletRedemptionQueryKeys.user]),
-    ])
+    await settleRedemptionRefreshes([dependencies.refreshUser])
     return true
   }
 
@@ -105,11 +94,6 @@ export async function executeRedemption(
   await settleRedemptionRefreshes([
     dependencies.refreshUser,
     dependencies.refreshSubscriptions,
-    () =>
-      dependencies.invalidateQueries([
-        walletRedemptionQueryKeys.user,
-        walletRedemptionQueryKeys.subscriptions,
-      ]),
   ])
   return true
 }
