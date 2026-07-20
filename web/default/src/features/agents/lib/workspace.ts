@@ -183,6 +183,7 @@ export function localDateInputToTimestamp(value: string): number | undefined {
 }
 
 export const agentQueryKeys = {
+  access: ['agent', 'access'] as const,
   overview: ['agent', 'overview'] as const,
   offers: ['agent', 'offers'] as const,
   orders: ['agent', 'orders'] as const,
@@ -197,6 +198,9 @@ export function agentUserQueryKey(
 ): readonly unknown[] {
   return [...prefix, userID, ...parts]
 }
+
+export const agentAccessQueryKey = (userID: number) =>
+  agentUserQueryKey(agentQueryKeys.access, userID)
 
 export const agentMutationInvalidationKeys = [
   agentQueryKeys.overview,

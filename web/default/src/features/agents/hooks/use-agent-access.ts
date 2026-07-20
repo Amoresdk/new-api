@@ -23,10 +23,10 @@ import { useStatus } from '@/hooks/use-status'
 import { useAuthStore } from '@/stores/auth-store'
 
 import { getAgentAccessOverview } from '../api'
+import { agentAccessQueryKey } from '../lib/workspace'
 import type { AgentOverview, ApiResult } from '../types'
 
-export const agentAccessQueryKey = (userID: number) =>
-  ['agent', 'access', userID] as const
+export { agentAccessQueryKey } from '../lib/workspace'
 
 function isAgentAccessDenied(error: unknown): boolean {
   return axios.isAxiosError(error) && error.response?.status === 403

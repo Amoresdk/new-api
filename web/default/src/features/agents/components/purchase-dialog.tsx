@@ -44,12 +44,16 @@ import {
 } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
 import { Spinner } from '@/components/ui/spinner'
+import { useAuthStore } from '@/stores/auth-store'
 
 import { purchaseAgentCodes } from '../api'
 import { formatAgentPoints } from '../lib/money'
 import {
+  refreshAgentMutationQueries,
+  setAgentMutationBalance,
+} from '../lib/mutation-sync'
+import {
   AgentIdempotencyKeyStore,
-  agentMutationInvalidationKeys,
   canChangeAgentDialogOpen,
   resetAgentDialogLifecycle,
 } from '../lib/workspace'
@@ -70,6 +74,7 @@ type PurchaseDialogProps = {
 export function PurchaseDialog(props: PurchaseDialogProps) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
+  const userID = useAuthStore((state) => state.auth.user?.id ?? 0)
   const keyStore = useRef(new AgentIdempotencyKeyStore())
   const [result, setResult] = useState<AgentPurchaseResponse | null>(null)
   const form = useForm<PurchaseFormValues>({
@@ -89,15 +94,12 @@ export function PurchaseDialog(props: PurchaseDialogProps) {
       if (!response.success) throw new Error('Purchase failed')
       return response.data
     },
-    onSuccess: async (data) => {
+    onSuccess: (data) => {
       keyStore.current.complete()
       setResult(data)
       toast.success(t('Package codes purchased'))
-      await Promise.all(
-        agentMutationInvalidationKeys.map((queryKey) =>
-          queryClient.invalidateQueries({ queryKey })
-        )
-      )
+      setAgentMutationBalance(queryClient, userID, data.balance_after)
+      void refreshAgentMutationQueries(queryClient, userID)
     },
     onError: () => toast.error(t('Failed to purchase package codes')),
   })

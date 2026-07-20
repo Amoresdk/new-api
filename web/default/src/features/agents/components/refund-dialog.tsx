@@ -33,12 +33,16 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Spinner } from '@/components/ui/spinner'
+import { useAuthStore } from '@/stores/auth-store'
 
 import { refundAgentCodes } from '../api'
 import { formatAgentPoints } from '../lib/money'
 import {
+  refreshAgentMutationQueries,
+  setAgentMutationBalance,
+} from '../lib/mutation-sync'
+import {
   AgentIdempotencyKeyStore,
-  agentMutationInvalidationKeys,
   canChangeAgentDialogOpen,
   resetAgentDialogLifecycle,
 } from '../lib/workspace'
@@ -54,6 +58,7 @@ type RefundDialogProps = {
 export function RefundDialog(props: RefundDialogProps) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
+  const userID = useAuthStore((state) => state.auth.user?.id ?? 0)
   const keyStore = useRef(new AgentIdempotencyKeyStore())
   const [result, setResult] = useState<AgentRefundResponse | null>(null)
   const mutation = useMutation({
@@ -69,16 +74,13 @@ export function RefundDialog(props: RefundDialogProps) {
       if (!response.success) throw new Error('Refund failed')
       return response.data
     },
-    onSuccess: async (data) => {
+    onSuccess: (data) => {
       keyStore.current.complete()
       setResult(data)
       props.onRefunded(data.redemption_ids)
       toast.success(t('Package codes refunded'))
-      await Promise.all(
-        agentMutationInvalidationKeys.map((queryKey) =>
-          queryClient.invalidateQueries({ queryKey })
-        )
-      )
+      setAgentMutationBalance(queryClient, userID, data.balance_after)
+      void refreshAgentMutationQueries(queryClient, userID)
     },
     onError: () => toast.error(t('Failed to refund package codes')),
   })
