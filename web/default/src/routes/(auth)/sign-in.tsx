@@ -20,8 +20,8 @@ import { createFileRoute, redirect } from '@tanstack/react-router'
 import { z } from 'zod'
 
 import { resolveAgentAccess } from '@/features/agents/hooks/use-agent-access'
-import { SignIn } from '@/features/auth/sign-in'
 import { resolvePostLoginTarget } from '@/features/auth/lib/post-login-redirect'
+import { SignIn } from '@/features/auth/sign-in'
 import { useAuthStore } from '@/stores/auth-store'
 
 const searchSchema = z.object({

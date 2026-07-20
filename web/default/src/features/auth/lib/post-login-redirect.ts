@@ -2,7 +2,12 @@ import type { User } from '@/features/users/types'
 import { ROLE } from '@/lib/roles'
 
 type PostLoginUser = Pick<User, 'role'>
-type PostLoginAccessRequirement = 'dashboard' | 'user' | 'agent' | 'admin' | 'root'
+type PostLoginAccessRequirement =
+  | 'dashboard'
+  | 'user'
+  | 'agent'
+  | 'admin'
+  | 'root'
 
 const ROOT_PREFIXES = ['/system-settings', '/system-info'] as const
 const ADMIN_PREFIXES = [

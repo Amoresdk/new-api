@@ -5,14 +5,14 @@ import { QueryClient } from '@tanstack/react-query'
 
 import type { AgentOverview, ApiResult } from '../types'
 import {
+  refreshAgentMutationQueries,
+  setAgentMutationBalance,
+} from './mutation-sync'
+import {
   agentAccessQueryKey,
   agentQueryKeys,
   agentUserQueryKey,
 } from './workspace'
-import {
-  refreshAgentMutationQueries,
-  setAgentMutationBalance,
-} from './mutation-sync'
 
 const overview = (balance: string): AgentOverview => ({
   status: 'active',
