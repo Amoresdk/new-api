@@ -19,10 +19,12 @@ For commercial licensing, please contact support@quantumnous.com
 import { useNavigate } from '@tanstack/react-router'
 import i18n from 'i18next'
 
+import { resolveAgentAccess } from '@/features/agents/hooks/use-agent-access'
 import type { User } from '@/features/users/types'
 import { getSelf } from '@/lib/api'
 import { useAuthStore } from '@/stores/auth-store'
 
+import { resolvePostLoginTarget } from '../lib/post-login-redirect'
 import { saveUserId } from '../lib/storage'
 
 function getSavedLanguage(user: User): string | undefined {
@@ -65,19 +67,20 @@ export function useAuthRedirect() {
     }
 
     // Fetch and set user data
+    let resolvedUser: User | undefined
     try {
       const self = await getSelf()
       if (self?.success && self.data) {
-        const user = self.data as User
-        auth.setUser(user)
+        resolvedUser = self.data as User
+        auth.setUser(resolvedUser)
 
         // Update user ID if not already set
-        if (user.id) {
-          saveUserId(user.id)
+        if (resolvedUser.id) {
+          saveUserId(resolvedUser.id)
         }
 
         // Restore saved language preference
-        const savedLang = getSavedLanguage(user)
+        const savedLang = getSavedLanguage(resolvedUser)
         if (savedLang && savedLang !== i18n.language) {
           i18n.changeLanguage(savedLang)
         }
@@ -88,7 +91,11 @@ export function useAuthRedirect() {
     }
 
     // Navigate to target page
-    const targetPath = redirectTo || '/dashboard'
+    const targetPath = await resolvePostLoginTarget(
+      redirectTo,
+      resolvedUser,
+      async () => (await resolveAgentAccess()) !== null
+    )
     navigate({ to: targetPath, replace: true })
   }
 

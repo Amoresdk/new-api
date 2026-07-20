@@ -19,7 +19,9 @@ For commercial licensing, please contact support@quantumnous.com
 import { createFileRoute, redirect } from '@tanstack/react-router'
 import { z } from 'zod'
 
+import { resolveAgentAccess } from '@/features/agents/hooks/use-agent-access'
 import { SignIn } from '@/features/auth/sign-in'
+import { resolvePostLoginTarget } from '@/features/auth/lib/post-login-redirect'
 import { useAuthStore } from '@/stores/auth-store'
 
 const searchSchema = z.object({
@@ -34,9 +36,12 @@ export const Route = createFileRoute('/(auth)/sign-in')({
 
     // 如果已经有用户信息，说明已登录
     if (auth.user) {
-      // 优先使用 redirect 参数（用户之前想去的地方）
-      // 否则跳转到 dashboard
-      throw redirect({ to: search?.redirect || '/dashboard' })
+      const target = await resolvePostLoginTarget(
+        search.redirect,
+        auth.user,
+        async () => (await resolveAgentAccess()) !== null
+      )
+      throw redirect({ to: target })
     }
   },
 })
