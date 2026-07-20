@@ -85,6 +85,31 @@ func TestRedeemReturnsTypedQuotaResult(t *testing.T) {
 	assert.Equal(t, float64(500), data["quota"])
 }
 
+func TestLegacyTopUpStillCreditsQuota(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	user := setupUserRedemptionControllerTest(t)
+	code := model.Redemption{
+		Key: "51000000000000000000000000000002", Name: "controller-legacy-quota",
+		Status: common.RedemptionCodeStatusEnabled, Type: common.RedemptionCodeTypeQuota, Quota: 700,
+	}
+	require.NoError(t, model.DB.Create(&code).Error)
+
+	recorder := httptest.NewRecorder()
+	context, _ := gin.CreateTestContext(recorder)
+	context.Set("id", user.Id)
+	context.Request = httptest.NewRequest("POST", "/api/user/topup", strings.NewReader(`{"key":"51000000000000000000000000000002"}`))
+	context.Request.Header.Set("Content-Type", "application/json")
+	TopUp(context)
+
+	var response map[string]interface{}
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+	assert.Equal(t, true, response["success"])
+	assert.Equal(t, float64(700), response["data"])
+	var reloaded model.User
+	require.NoError(t, model.DB.First(&reloaded, user.Id).Error)
+	assert.Equal(t, 700, reloaded.Quota)
+}
+
 func TestRedeemReturnsSameFailureForUnavailableCodes(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	user := setupUserRedemptionControllerTest(t)
