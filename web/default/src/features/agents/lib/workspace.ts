@@ -37,7 +37,14 @@ const optionalTimestamp = z
 export const agentWorkspaceSearchSchema = z
   .object({
     tab: z
-      .enum(['overview', 'orders', 'codes', 'ledger'])
+      .enum([
+        'overview',
+        'orders',
+        'codes',
+        'ledger',
+        'customers',
+        'customer-logs',
+      ])
       .optional()
       .catch('overview'),
     p: z.number().int().positive().optional().catch(1),
@@ -56,6 +63,18 @@ export const agentWorkspaceSearchSchema = z
       .enum(['admin_credit', 'admin_debit', 'purchase', 'refund'])
       .optional()
       .catch(undefined),
+    customer_keyword: z.string().trim().optional().catch(undefined),
+    customer_sort_by: z
+      .enum(['status', 'remaining_quota', 'subscription_end_time', 'bound_at'])
+      .optional()
+      .catch(undefined),
+    customer_sort_order: z.enum(['asc', 'desc']).optional().catch(undefined),
+    customer_id: optionalPositiveInteger,
+    customer_username: z.string().trim().optional().catch(undefined),
+    log_type: z.number().int().min(0).max(7).optional().catch(undefined),
+    model_name: z.string().trim().optional().catch(undefined),
+    token_name: z.string().trim().optional().catch(undefined),
+    log_group: z.string().trim().optional().catch(undefined),
     start_timestamp: optionalTimestamp,
     end_timestamp: optionalTimestamp,
   })
@@ -64,7 +83,13 @@ export const agentWorkspaceSearchSchema = z
       Object.fromEntries(
         Object.entries(search).filter(([, value]) => value !== undefined)
       ) as {
-        tab?: 'overview' | 'orders' | 'codes' | 'ledger'
+        tab?:
+          | 'overview'
+          | 'orders'
+          | 'codes'
+          | 'ledger'
+          | 'customers'
+          | 'customer-logs'
         p?: number
         page_size?: number
         plan_id?: number
@@ -72,6 +97,19 @@ export const agentWorkspaceSearchSchema = z
         order_status?: 'completed' | 'partially_refunded' | 'refunded'
         code_status?: 'unused' | 'used' | 'refunded' | 'expired'
         event_type?: 'admin_credit' | 'admin_debit' | 'purchase' | 'refund'
+        customer_keyword?: string
+        customer_sort_by?:
+          | 'status'
+          | 'remaining_quota'
+          | 'subscription_end_time'
+          | 'bound_at'
+        customer_sort_order?: 'asc' | 'desc'
+        customer_id?: number
+        customer_username?: string
+        log_type?: number
+        model_name?: string
+        token_name?: string
+        log_group?: string
         start_timestamp?: number
         end_timestamp?: number
       }
@@ -189,6 +227,10 @@ export const agentQueryKeys = {
   orders: ['agent', 'orders'] as const,
   codes: ['agent', 'codes'] as const,
   creditLogs: ['agent', 'credit-logs'] as const,
+  promotion: ['agent', 'promotion'] as const,
+  customers: ['agent', 'customers'] as const,
+  customerLogs: ['agent', 'customer-logs'] as const,
+  customerLogStats: ['agent', 'customer-log-stats'] as const,
 }
 
 export function agentUserQueryKey(

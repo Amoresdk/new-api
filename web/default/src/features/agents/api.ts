@@ -18,6 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { z } from 'zod'
 
+import { usageLogSchema } from '@/features/usage-logs/data/schema'
 import { api, type ApiRequestConfig } from '@/lib/api'
 
 import {
@@ -28,6 +29,8 @@ import {
   agentCreditAdjustmentRequestSchema,
   agentCreditAdjustmentResponseSchema,
   agentCreditLogSchema,
+  agentCustomerLogStatsSchema,
+  agentCustomerSchema,
   agentDailyLimitRequestSchema,
   agentOfferSchema,
   agentOfferUpsertRequestSchema,
@@ -37,6 +40,7 @@ import {
   agentPageSchema,
   agentPurchaseRequestSchema,
   agentPurchaseResponseSchema,
+  agentPromotionSchema,
   agentReconciliationSchema,
   agentRefundRequestSchema,
   agentRefundResponseSchema,
@@ -52,6 +56,11 @@ import {
   type AgentCreditAdjustmentResponse,
   type AgentCreditLog,
   type AgentCreditLogParams,
+  type AgentCustomer,
+  type AgentCustomerLog,
+  type AgentCustomerLogParams,
+  type AgentCustomerLogStats,
+  type AgentCustomerParams,
   type AgentDailyLimitRequest,
   type AgentOffer,
   type AgentOfferUpsertRequest,
@@ -61,6 +70,7 @@ import {
   type AgentPage,
   type AgentPurchaseRequest,
   type AgentPurchaseResponse,
+  type AgentPromotion,
   type AgentReconciliation,
   type AgentRefundRequest,
   type AgentRefundResponse,
@@ -83,6 +93,16 @@ const agentCodesResponseSchema = apiResponseSchema(
 )
 const agentCreditLogsResponseSchema = apiResponseSchema(
   agentPageSchema(agentCreditLogSchema)
+)
+const agentPromotionResponseSchema = apiResponseSchema(agentPromotionSchema)
+const agentCustomersResponseSchema = apiResponseSchema(
+  agentPageSchema(agentCustomerSchema)
+)
+const agentCustomerLogsResponseSchema = apiResponseSchema(
+  agentPageSchema(usageLogSchema)
+)
+const agentCustomerLogStatsResponseSchema = apiResponseSchema(
+  agentCustomerLogStatsSchema
 )
 const agentRefundEnvelopeSchema = apiResponseSchema(agentRefundResponseSchema)
 const adminAgentsResponseSchema = apiResponseSchema(
@@ -181,10 +201,34 @@ const selfExportCodeParamsSchema = selfCodeParamsSchema.omit({
   p: true,
   page_size: true,
 })
+const selfCustomerParamsSchema = z
+  .object({
+    p: pageFilterFields.p,
+    page_size: pageFilterFields.page_size,
+    keyword: z.string().optional(),
+    sort_by: z
+      .enum(['status', 'remaining_quota', 'subscription_end_time', 'bound_at'])
+      .optional(),
+    sort_order: z.enum(['asc', 'desc']).optional(),
+  })
+  .strict()
+const selfCustomerLogParamsSchema = z
+  .object({
+    ...pageFilterFields,
+    user_id: positiveIDSchema.optional(),
+    username: z.string().optional(),
+    type: z.number().int().min(0).max(7).optional(),
+    model_name: z.string().optional(),
+    token_name: z.string().optional(),
+    group: z.string().optional(),
+  })
+  .strict()
 
 type SelfOrderParams = z.infer<typeof selfOrderParamsSchema>
 type SelfCodeParams = z.infer<typeof selfCodeParamsSchema>
 type SelfExportCodeParams = z.infer<typeof selfExportCodeParamsSchema>
+type SelfCustomerParams = z.infer<typeof selfCustomerParamsSchema>
+type SelfCustomerLogParams = z.infer<typeof selfCustomerLogParamsSchema>
 
 function selfOrderParams(
   params: Omit<AgentOrderParams, 'agent_user_id'>
@@ -222,6 +266,33 @@ function selfExportCodeParams(
     plan_id: params.plan_id,
     order_id: params.order_id,
     status: params.status,
+  })
+}
+
+function selfCustomerParams(params: AgentCustomerParams): SelfCustomerParams {
+  return selfCustomerParamsSchema.parse({
+    p: params.p,
+    page_size: params.page_size,
+    keyword: params.keyword,
+    sort_by: params.sort_by,
+    sort_order: params.sort_order,
+  })
+}
+
+function selfCustomerLogParams(
+  params: AgentCustomerLogParams
+): SelfCustomerLogParams {
+  return selfCustomerLogParamsSchema.parse({
+    p: params.p,
+    page_size: params.page_size,
+    user_id: params.user_id,
+    username: params.username,
+    type: params.type,
+    model_name: params.model_name,
+    token_name: params.token_name,
+    group: params.group,
+    start_timestamp: params.start_timestamp,
+    end_timestamp: params.end_timestamp,
   })
 }
 
@@ -295,6 +366,42 @@ export async function getAgentCreditLogs(
 ): Promise<ApiResult<AgentPage<AgentCreditLog>>> {
   const response = await api.get('/api/agent/credit-logs', { params })
   return agentCreditLogsResponseSchema.parse(response.data)
+}
+
+export async function getAgentPromotion(): Promise<ApiResult<AgentPromotion>> {
+  const response = await api.get('/api/agent/promotion')
+  return agentPromotionResponseSchema.parse(response.data)
+}
+
+export async function getAgentCustomers(
+  params: AgentCustomerParams = {}
+): Promise<ApiResult<AgentPage<AgentCustomer>>> {
+  const response = await api.get('/api/agent/customers', {
+    params: selfCustomerParams(params),
+  })
+  return agentCustomersResponseSchema.parse(response.data)
+}
+
+export async function getAgentCustomerLogs(
+  params: AgentCustomerLogParams = {}
+): Promise<ApiResult<AgentPage<AgentCustomerLog>>> {
+  const response = await api.get('/api/agent/logs', {
+    params: selfCustomerLogParams(params),
+  })
+  return agentCustomerLogsResponseSchema.parse(response.data)
+}
+
+export async function getAgentCustomerLogStats(
+  params: AgentCustomerLogParams = {}
+): Promise<ApiResult<AgentCustomerLogStats>> {
+  const response = await api.get('/api/agent/logs/stat', {
+    params: selfCustomerLogParams({
+      ...params,
+      p: undefined,
+      page_size: undefined,
+    }),
+  })
+  return agentCustomerLogStatsResponseSchema.parse(response.data)
 }
 
 export async function refundAgentCodes(

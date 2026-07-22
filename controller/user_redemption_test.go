@@ -30,7 +30,7 @@ func setupUserRedemptionControllerTest(t *testing.T) model.User {
 	require.NoError(t, err)
 	sqlDB, err := db.DB()
 	require.NoError(t, err)
-	require.NoError(t, db.AutoMigrate(&model.User{}, &model.Log{}, &model.Redemption{}))
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.Log{}, &model.Redemption{}, &model.AgentAccount{}))
 	model.DB = db
 	common.SetDatabaseTypes(common.DatabaseTypeSQLite, common.DatabaseTypeSQLite)
 	t.Setenv("LOG_SQL_DSN", "")
@@ -108,6 +108,37 @@ func TestLegacyTopUpStillCreditsQuota(t *testing.T) {
 	var reloaded model.User
 	require.NoError(t, model.DB.First(&reloaded, user.Id).Error)
 	assert.Equal(t, 700, reloaded.Quota)
+}
+
+func TestLegacyTopUpBindsAgentCustomer(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	user := setupUserRedemptionControllerTest(t)
+	agent := model.User{
+		Id: 8102, Username: "controller-agent", AffCode: "controller-agent-aff",
+		Status: common.UserStatusEnabled, Role: common.RoleCommonUser,
+	}
+	require.NoError(t, model.DB.Create(&agent).Error)
+	require.NoError(t, model.DB.Create(&model.AgentAccount{UserId: agent.Id}).Error)
+	code := model.Redemption{
+		Key: "51000000000000000000000000000003", Name: "controller-agent-quota",
+		Status: common.RedemptionCodeStatusEnabled, Type: common.RedemptionCodeTypeQuota,
+		Quota: 700, AgentUserId: agent.Id,
+	}
+	require.NoError(t, model.DB.Create(&code).Error)
+
+	recorder := httptest.NewRecorder()
+	context, _ := gin.CreateTestContext(recorder)
+	context.Set("id", user.Id)
+	context.Request = httptest.NewRequest("POST", "/api/user/topup", strings.NewReader(`{"key":"51000000000000000000000000000003"}`))
+	context.Request.Header.Set("Content-Type", "application/json")
+	TopUp(context)
+
+	var response map[string]interface{}
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+	assert.Equal(t, true, response["success"])
+	var reloaded model.User
+	require.NoError(t, model.DB.First(&reloaded, user.Id).Error)
+	assert.Equal(t, agent.Id, reloaded.BoundAgentId)
 }
 
 func TestRedeemReturnsSameFailureForUnavailableCodes(t *testing.T) {

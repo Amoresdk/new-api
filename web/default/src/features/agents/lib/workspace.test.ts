@@ -73,6 +73,39 @@ describe('agent workspace URL state', () => {
     )
   })
 
+  test('accepts customer management and customer log URL state', () => {
+    assert.deepEqual(
+      agentWorkspaceSearchSchema.parse({
+        tab: 'customers',
+        customer_keyword: 'alice',
+        customer_sort_by: 'remaining_quota',
+        customer_sort_order: 'asc',
+      }),
+      {
+        tab: 'customers',
+        customer_keyword: 'alice',
+        customer_sort_by: 'remaining_quota',
+        customer_sort_order: 'asc',
+      }
+    )
+    assert.deepEqual(
+      agentWorkspaceSearchSchema.parse({
+        tab: 'customer-logs',
+        customer_id: 12,
+        customer_username: 'alice',
+        log_type: 2,
+        model_name: 'gpt-5',
+      }),
+      {
+        tab: 'customer-logs',
+        customer_id: 12,
+        customer_username: 'alice',
+        log_type: 2,
+        model_name: 'gpt-5',
+      }
+    )
+  })
+
   test('round-trips date filters in the application-local calendar', () => {
     const timestamp = localDateInputToTimestamp('2026-07-20')
     assert.notEqual(timestamp, undefined)

@@ -264,6 +264,9 @@ func Register(c *gin.Context) {
 		common.ApiErrorI18n(c, i18n.MsgUserRegisterFailed)
 		return
 	}
+	if inviterId > 0 {
+		_, _ = service.TryBindUserToAgent(insertedUser.Id, inviterId)
+	}
 	// 生成默认令牌
 	if constant.GenerateDefaultToken {
 		key, err := common.GenerateKey()
@@ -1309,12 +1312,15 @@ func TopUp(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	quota, err := model.Redeem(req.Key, id)
+	quota, agentUserID, err := model.RedeemWithAgent(req.Key, id)
 	if err != nil {
 		// 不向用户暴露兑换失败的细分原因，避免攻击者根据错误类型判断兑换码状态。
 		common.ApiErrorI18n(c, i18n.MsgRedeemFailed)
 		logger.LogError(c, fmt.Sprintf("failed to redeem quota code for user %d: %s", id, err.Error()))
 		return
+	}
+	if agentUserID > 0 {
+		_, _ = service.TryBindUserToAgent(id, agentUserID)
 	}
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,

@@ -131,6 +131,13 @@ func formatUserLogs(logs []*Log, startIdx int) {
 	assignDisplayLogIds(logs, startIdx)
 }
 
+// FormatUserLogsForRequester applies the same channel enrichment and
+// admin-field removal used by the self-log endpoint to another scoped log
+// query.
+func FormatUserLogsForRequester(logs []*Log, startIdx int) {
+	formatUserLogs(logs, startIdx)
+}
+
 func GetLogByTokenId(tokenId int) (logs []*Log, err error) {
 	order := "id desc"
 	if common.UsingLogDatabase(common.DatabaseTypeClickHouse) {

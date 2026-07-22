@@ -1,6 +1,7 @@
 package model
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net/url"
@@ -48,6 +49,19 @@ func initCol() {
 		logGroupCol = "`group`"
 		logKeyCol = "`key`"
 	}
+}
+
+// LogGroupColumn returns the dialect-safe quoted group column used by log
+// queries. Tests and secondary packages may call it before InitDB has selected
+// a database, so it also derives a safe fallback from the configured dialect.
+func LogGroupColumn() string {
+	if logGroupCol != "" {
+		return logGroupCol
+	}
+	if common.UsingLogDatabase(common.DatabaseTypePostgreSQL) {
+		return `"group"`
+	}
+	return "`group`"
 }
 
 var DB *gorm.DB
@@ -317,6 +331,7 @@ func migrateDB() error {
 			return err
 		}
 	}
+	startAgentCustomerBackfill()
 	return nil
 }
 
@@ -394,8 +409,25 @@ func migrateDBFast() error {
 			return err
 		}
 	}
+	startAgentCustomerBackfill()
 	common.SysLog("database migrated")
 	return nil
+}
+
+func startAgentCustomerBackfill() {
+	go func() {
+		report, err := BackfillAgentCustomerBindings(context.Background(), 500)
+		if err != nil {
+			common.SysLog("failed to backfill agent customer bindings: " + err.Error())
+			return
+		}
+		if report.Bound > 0 || report.Unresolved > 0 {
+			common.SysLog(fmt.Sprintf(
+				"agent customer binding backfill completed: bound=%d preserved=%d unresolved=%d",
+				report.Bound, report.Preserved, report.Unresolved,
+			))
+		}
+	}()
 }
 
 func migrateLOGDB() error {

@@ -28,6 +28,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 
 import { AgentCodesTable } from './components/agent-codes-table'
 import { AgentCreditLogsTable } from './components/agent-credit-logs-table'
+import { AgentCustomerLogs } from './components/agent-customer-logs'
+import { AgentCustomersTable } from './components/agent-customers-table'
 import { AgentOffers } from './components/agent-offers'
 import { AgentOrdersTable } from './components/agent-orders-table'
 import { AgentOverview } from './components/agent-overview'
@@ -58,6 +60,14 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
           queryClient.invalidateQueries({ queryKey })
         ),
         queryClient.invalidateQueries({ queryKey: agentQueryKeys.offers }),
+        queryClient.invalidateQueries({ queryKey: agentQueryKeys.promotion }),
+        queryClient.invalidateQueries({ queryKey: agentQueryKeys.customers }),
+        queryClient.invalidateQueries({
+          queryKey: agentQueryKeys.customerLogs,
+        }),
+        queryClient.invalidateQueries({
+          queryKey: agentQueryKeys.customerLogStats,
+        }),
       ])
     } finally {
       setRefreshing(false)
@@ -99,6 +109,10 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
               <TabsTrigger value='orders'>{t('Orders')}</TabsTrigger>
               <TabsTrigger value='codes'>{t('Code inventory')}</TabsTrigger>
               <TabsTrigger value='ledger'>{t('Point ledger')}</TabsTrigger>
+              <TabsTrigger value='customers'>{t('Customers')}</TabsTrigger>
+              <TabsTrigger value='customer-logs'>
+                {t('Customer logs')}
+              </TabsTrigger>
             </TabsList>
           </div>
           <TabsContent value='overview' className='flex flex-col gap-6 pt-2'>
@@ -119,6 +133,18 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
           </TabsContent>
           <TabsContent value='ledger' className='pt-2'>
             <AgentCreditLogsTable
+              search={props.search}
+              onSearchChange={props.onSearchChange}
+            />
+          </TabsContent>
+          <TabsContent value='customers' className='pt-2'>
+            <AgentCustomersTable
+              search={props.search}
+              onSearchChange={props.onSearchChange}
+            />
+          </TabsContent>
+          <TabsContent value='customer-logs' className='pt-2'>
+            <AgentCustomerLogs
               search={props.search}
               onSearchChange={props.onSearchChange}
             />

@@ -24,6 +24,7 @@ type RedemptionResult struct {
 	SubscriptionID int    `json:"subscription_id,omitempty"`
 	PlanTitle      string `json:"plan_title,omitempty"`
 	EndTime        int64  `json:"end_time,omitempty"`
+	AgentUserID    int    `json:"-"`
 }
 
 // RedeemCode dispatches legacy quota codes to the existing redemption path and
@@ -45,11 +46,13 @@ func RedeemCode(userID int, key string) (*RedemptionResult, error) {
 
 	switch codeType.Type {
 	case common.RedemptionCodeTypeQuota:
-		quota, err := model.Redeem(key, userID)
+		quota, agentUserID, err := model.RedeemWithAgent(key, userID)
 		if err != nil {
 			return nil, redeemCodeError(err)
 		}
-		return &RedemptionResult{Type: RedemptionResultTypeQuota, Quota: &quota}, nil
+		result := &RedemptionResult{Type: RedemptionResultTypeQuota, Quota: &quota, AgentUserID: agentUserID}
+		bindCustomerAfterRedeem(userID, result.AgentUserID)
+		return result, nil
 	case common.RedemptionCodeTypeSubscription:
 		return redeemSubscriptionCode(userID, key)
 	default:
@@ -120,6 +123,7 @@ func redeemSubscriptionCode(userID int, key string) (*RedemptionResult, error) {
 		result = RedemptionResult{
 			Type: RedemptionResultTypeSubscription, SubscriptionID: subscription.Id,
 			PlanTitle: decoded.PlanTitle, EndTime: subscription.EndTime,
+			AgentUserID: redeemedCode.AgentUserId,
 		}
 		return nil
 	})
@@ -132,7 +136,17 @@ func redeemSubscriptionCode(userID int, key string) (*RedemptionResult, error) {
 	}
 	model.RecordLog(userID, model.LogTypeTopup,
 		fmt.Sprintf("通过代理套餐兑换码激活订阅 %s，兑换码ID %d", snapshot.PlanTitle, redeemedCode.Id))
+	bindCustomerAfterRedeem(userID, result.AgentUserID)
 	return &result, nil
+}
+
+func bindCustomerAfterRedeem(userID int, agentUserID int) {
+	if agentUserID <= 0 {
+		return
+	}
+	if _, err := TryBindUserToAgent(userID, agentUserID); err != nil {
+		common.SysLog(fmt.Sprintf("failed to bind redeemed customer %d to agent %d: %v", userID, agentUserID, err))
+	}
 }
 
 func redeemCodeError(cause error) error {

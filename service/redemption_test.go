@@ -124,6 +124,39 @@ func TestRedeemCodeQuotaCreditsExactlyOnce(t *testing.T) {
 	assert.Equal(t, 500, reloaded.Quota)
 }
 
+func TestRedeemCodeBindsUnboundCustomerAndKeepsFirstAgent(t *testing.T) {
+	setupRedemptionServiceTest(t)
+	user := createRedemptionUser(t, 7005, "starter")
+	require.NoError(t, model.DB.Create(&model.AgentAccount{UserId: 8101, Status: model.AgentAccountStatusActive}).Error)
+	require.NoError(t, model.DB.Create(&model.AgentAccount{UserId: 8102, Status: model.AgentAccountStatusDisabled}).Error)
+
+	firstCode := model.Redemption{
+		Key: "41000000000000000000000000000005", Name: "agent-one-code",
+		Status: common.RedemptionCodeStatusEnabled, Type: common.RedemptionCodeTypeQuota,
+		Quota: 500, AgentUserId: 8101, CreatedTime: common.GetTimestamp(),
+	}
+	secondCode := model.Redemption{
+		Key: "41000000000000000000000000000006", Name: "agent-two-code",
+		Status: common.RedemptionCodeStatusEnabled, Type: common.RedemptionCodeTypeQuota,
+		Quota: 600, AgentUserId: 8102, CreatedTime: common.GetTimestamp(),
+	}
+	require.NoError(t, model.DB.Create(&firstCode).Error)
+	require.NoError(t, model.DB.Create(&secondCode).Error)
+
+	result, err := RedeemCode(user.Id, firstCode.Key)
+	require.NoError(t, err)
+	assert.Equal(t, 8101, result.AgentUserID)
+
+	var customer model.User
+	require.NoError(t, model.DB.First(&customer, user.Id).Error)
+	assert.Equal(t, 8101, customer.BoundAgentId)
+
+	_, err = RedeemCode(user.Id, secondCode.Key)
+	require.NoError(t, err)
+	require.NoError(t, model.DB.First(&customer, user.Id).Error)
+	assert.Equal(t, 8101, customer.BoundAgentId)
+}
+
 func TestRedeemCodeQuotaZeroResultIncludesQuotaField(t *testing.T) {
 	setupRedemptionServiceTest(t)
 	user := createRedemptionUser(t, 7003, "starter")
@@ -192,6 +225,7 @@ func TestRedeemCodeSubscriptionUsesSoldSnapshotAfterPlanChanges(t *testing.T) {
 	var reloadedUser model.User
 	require.NoError(t, model.DB.First(&reloadedUser, user.Id).Error)
 	assert.Equal(t, "pro", reloadedUser.Group)
+	assert.Equal(t, 8001, reloadedUser.BoundAgentId)
 
 	var logs []model.Log
 	require.NoError(t, model.DB.Where("user_id = ?", user.Id).Find(&logs).Error)

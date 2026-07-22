@@ -32,10 +32,17 @@ import {
   getAdminAgentOrders,
   getAgentAccessOverview,
   getAgentCodes,
+  getAgentCustomerLogs,
+  getAgentCustomers,
   getAgentOrders,
   redeemTypedCode,
 } from './api'
-import type { AgentCodeParams, AgentOrderParams } from './types'
+import type {
+  AgentCodeParams,
+  AgentCustomerLogParams,
+  AgentCustomerParams,
+  AgentOrderParams,
+} from './types'
 
 const emptyPage = {
   success: true,
@@ -102,6 +109,58 @@ describe('agent API request isolation', () => {
       }
       assert.equal((requests[0].params as Record<string, unknown>).plan_id, 7)
       assert.equal((requests[1].params as Record<string, unknown>).order_id, 8)
+    } finally {
+      api.defaults.adapter = originalAdapter
+    }
+  })
+
+  test('whitelists customer and customer-log filters', async () => {
+    const originalAdapter = api.defaults.adapter
+    const requests: InternalAxiosRequestConfig[] = []
+    api.defaults.adapter = async (config) => {
+      requests.push(config)
+      return response(config, emptyPage)
+    }
+
+    try {
+      const customerParams = {
+        keyword: 'alice',
+        sort_by: 'remaining_quota',
+        sort_order: 'asc',
+        agent_user_id: 999,
+        unexpected: 'drop-me',
+      } as AgentCustomerParams & {
+        agent_user_id: number
+        unexpected: string
+      }
+      const logParams = {
+        username: 'alice',
+        model_name: 'gpt-5',
+        type: 2,
+        agent_user_id: 999,
+        unexpected: 'drop-me',
+      } as AgentCustomerLogParams & {
+        agent_user_id: number
+        unexpected: string
+      }
+
+      await getAgentCustomers(customerParams)
+      await getAgentCustomerLogs(logParams)
+
+      assert.equal(requests.length, 2)
+      for (const request of requests) {
+        const params = request.params as Record<string, unknown>
+        assert.equal(Object.hasOwn(params, 'agent_user_id'), false)
+        assert.equal(Object.hasOwn(params, 'unexpected'), false)
+      }
+      assert.equal(
+        (requests[0].params as Record<string, unknown>).sort_by,
+        'remaining_quota'
+      )
+      assert.equal(
+        (requests[1].params as Record<string, unknown>).model_name,
+        'gpt-5'
+      )
     } finally {
       api.defaults.adapter = originalAdapter
     }

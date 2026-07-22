@@ -338,7 +338,7 @@ func writeAgentError(c *gin.Context, err error) {
 		common.ApiErrorMsg(c, "idempotency key was already used for a different request")
 	case errors.Is(err, service.ErrAgentAccountConflict):
 		common.ApiErrorMsg(c, "agent account changed concurrently; please retry")
-	case errors.Is(err, service.ErrAgentQueryInvalid):
+	case errors.Is(err, service.ErrAgentQueryInvalid), errors.Is(err, service.ErrAgentCustomerQuery):
 		common.ApiErrorMsg(c, "invalid agent query parameters")
 	case errors.Is(err, service.ErrAgentExportLimitExceeded):
 		common.ApiErrorMsg(c, "code export exceeds the 10000 row limit")

@@ -18,6 +18,8 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { z } from 'zod'
 
+import type { UsageLog } from '@/features/usage-logs/data/schema'
+
 const integer = z.number().int()
 const nonnegativeInteger = integer.nonnegative()
 const positiveInteger = integer.positive()
@@ -249,6 +251,40 @@ export const agentCreditAdjustmentResponseSchema = z
   })
   .strict()
 
+export const agentPromotionSchema = z
+  .object({
+    aff_code: z.string(),
+    register_link: z.string(),
+    bound_customer_count: nonnegativeInteger,
+    month_bound_customer_count: nonnegativeInteger,
+  })
+  .strict()
+
+export const agentCustomerSchema = z
+  .object({
+    id: positiveInteger,
+    username: z.string(),
+    display_name: z.string(),
+    status: integer,
+    created_at: nonnegativeInteger,
+    last_login_at: nonnegativeInteger,
+    quota: integer,
+    used_quota: integer,
+    remaining_quota: nonnegativeInteger,
+    bound_at: nonnegativeInteger,
+    subscription_plan_title: z.string().optional().default(''),
+    subscription_end_time: nonnegativeInteger.optional().default(0),
+  })
+  .strict()
+
+export const agentCustomerLogStatsSchema = z
+  .object({
+    quota: integer,
+    rpm: nonnegativeInteger,
+    tpm: nonnegativeInteger,
+  })
+  .strict()
+
 export const typedRedemptionSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('quota'), quota: integer }).strict(),
   z
@@ -366,6 +402,10 @@ export type AgentRefundResponse = z.infer<typeof agentRefundResponseSchema>
 export type AgentCreditAdjustmentResponse = z.infer<
   typeof agentCreditAdjustmentResponseSchema
 >
+export type AgentPromotion = z.infer<typeof agentPromotionSchema>
+export type AgentCustomer = z.infer<typeof agentCustomerSchema>
+export type AgentCustomerLog = UsageLog
+export type AgentCustomerLogStats = z.infer<typeof agentCustomerLogStatsSchema>
 export type TypedRedemption = z.infer<typeof typedRedemptionSchema>
 export type AgentPurchaseRequest = z.input<typeof agentPurchaseRequestSchema>
 export type AgentRefundRequest = z.input<typeof agentRefundRequestSchema>
@@ -407,6 +447,23 @@ export interface AgentCodeParams extends AgentPageParams {
 
 export interface AgentCreditLogParams extends AgentPageParams {
   event_type?: z.infer<typeof agentCreditEventSchema>
+}
+
+export interface AgentCustomerParams {
+  p?: number
+  page_size?: number
+  keyword?: string
+  sort_by?: 'status' | 'remaining_quota' | 'subscription_end_time' | 'bound_at'
+  sort_order?: 'asc' | 'desc'
+}
+
+export interface AgentCustomerLogParams extends AgentPageParams {
+  user_id?: number
+  username?: string
+  type?: number
+  model_name?: string
+  token_name?: string
+  group?: string
 }
 
 export interface AdminAgentParams {
